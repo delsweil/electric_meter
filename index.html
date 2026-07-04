@@ -109,6 +109,12 @@ body { margin:0; background:#14181B; }
 }
 
 .zt-chart-card { background: var(--panel); border:1px solid var(--border-soft); border-radius: var(--radius-lg); padding:16px; }
+.zt-stat-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:10px; margin:12px 0; }
+.zt-stat-card { background: var(--panel); border:1px solid var(--border-soft); border-radius: var(--radius-lg); padding:14px 16px; }
+.zt-stat-label { font-family:'IBM Plex Mono'; font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); margin-bottom:6px; }
+.zt-stat-value { font-family:'IBM Plex Mono'; font-size:20px; font-weight:600; color:var(--text); }
+.zt-stat-value .unit { font-size:12px; font-weight:400; color:var(--text-dim); margin-left:3px; }
+.zt-stat-sub { font-size:11px; color:var(--text-faint); margin-top:4px; }
 .zt-chart-wrap { position:relative; height:260px; }
 .zt-empty-note { font-size:11.5px; color: var(--text-faint); margin-top:10px; }
 
@@ -201,7 +207,7 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
       <div class="zt-header-actions">
         <span class="zt-userbar" id="zt-userbar"></span>
         <button class="zt-btn zt-btn-ghost" id="zt-btn-export">Export CSV</button>
-        <button class="zt-btn zt-btn-ghost" id="zt-btn-settings">Rename flats</button>
+        <button class="zt-btn zt-btn-ghost" id="zt-btn-settings">Settings</button>
         <button class="zt-btn zt-btn-ghost" id="zt-btn-import">Import photos</button>
         <button class="zt-btn zt-btn-primary" id="zt-btn-add-global">+ Add reading</button>
       </div>
@@ -232,12 +238,20 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
       <div class="zt-section-head">
         <div>
           <h2>Balcony solar — Flat 3</h2>
-          <div class="zt-section-sub">Consumption vs. fed-in generation, same periods as above.</div>
+          <div class="zt-section-sub">Two separate meters: how much the panels generated in total, and how much of that was fed back into the network. The difference is what Flat 3 used directly.</div>
         </div>
       </div>
       <div class="zt-chart-card">
         <div class="zt-chart-wrap"><canvas id="zt-chart-solar"></canvas></div>
-        <div class="zt-empty-note" id="zt-solar-empty" style="display:none;">Add readings for Flat 3 and its solar meter to compare them here.</div>
+        <div class="zt-empty-note" id="zt-solar-empty" style="display:none;">Add readings for Flat 3's consumption and its feed-in meter to compare them here.</div>
+      </div>
+
+      <div class="zt-stat-grid" id="zt-solar-stats"></div>
+
+      <div class="zt-chart-card" style="margin-top:12px;">
+        <div class="zt-section-sub" style="margin-bottom:10px;">Self-consumption = generated \u2212 fed into network, using the two solar meters directly (not estimated). Shown as how much of Flat 3's consumption solar covered vs. drew from the grid, with total generation overlaid.</div>
+        <div class="zt-chart-wrap"><canvas id="zt-chart-efficiency"></canvas></div>
+        <div class="zt-empty-note" id="zt-efficiency-empty" style="display:none;">Once Flat 3's consumption, feed-in meter, and total generation all have readings for overlapping periods, self-consumption will appear here.</div>
       </div>
     </div>
 
@@ -311,8 +325,8 @@ const docRef = doc(db, 'trackerData', 'main');
 let unsubscribeSnapshot = null;
 
 
-  var METER_ORDER = ['flat1','flat2','flat3','flat3solar'];
-  var METER_COLORS = { flat1:'#FFB020', flat2:'#FF7A45', flat3:'#E8543E', flat3solar:'#4FD1C5' };
+  var METER_ORDER = ['flat1','flat2','flat3','flat3solar','flat3gen'];
+  var METER_COLORS = { flat1:'#FFB020', flat2:'#FF7A45', flat3:'#E8543E', flat3solar:'#4FD1C5', flat3gen:'#8BD450' };
 
   function defaultData(){
     return {
@@ -320,9 +334,11 @@ let unsubscribeSnapshot = null;
         flat1: { name:'Flat 1', kind:'consumption' },
         flat2: { name:'Flat 2', kind:'consumption' },
         flat3: { name:'Flat 3', kind:'consumption' },
-        flat3solar: { name:'Flat 3 · Solar feed-in', kind:'generation' }
+        flat3solar: { name:'Flat 3 · Solar fed into network', kind:'generation' },
+        flat3gen: { name:'Flat 3 · Solar generated (total)', kind:'generation' }
       },
-      readings: { flat1:[], flat2:[], flat3:[], flat3solar:[] }
+      readings: { flat1:[], flat2:[], flat3:[], flat3solar:[], flat3gen:[] },
+      settings: { pricePerKwh: null }
     };
   }
 
@@ -330,7 +346,7 @@ let unsubscribeSnapshot = null;
   var granularity = 'week';
   var rangeCount = 10;
   var activeHistoryMeter = 'flat1';
-  var chartCompare = null, chartSolar = null, chartRaw = null;
+  var chartCompare = null, chartSolar = null, chartRaw = null, chartEfficiency = null;
   var pendingPhotoDataUrl = null;
   var editingId = null;
 
@@ -576,7 +592,8 @@ let unsubscribeSnapshot = null;
     var hasAny = (DATA.readings.flat3||[]).length>=2 || (DATA.readings.flat3solar||[]).length>=2;
     document.getElementById('zt-solar-empty').style.display = hasAny ? 'none' : 'block';
     var cons = prorate(DATA.readings.flat3||[], buckets);
-    var gen = prorate(DATA.readings.flat3solar||[], buckets);
+    var exported = prorate(DATA.readings.flat3solar||[], buckets);
+    var generated = prorate(DATA.readings.flat3gen||[], buckets);
     if (chartSolar) chartSolar.destroy();
     chartSolar = new Chart(ctx, {
       type: 'bar',
@@ -584,10 +601,100 @@ let unsubscribeSnapshot = null;
         labels: buckets.map(function(b){return b.label;}),
         datasets: [
           { label: 'Flat 3 consumption', data: cons.map(function(s){return s.value;}), backgroundColor: METER_COLORS.flat3, borderRadius:4, maxBarThickness:26 },
-          { label: 'Solar fed into grid', data: gen.map(function(s){return s.value;}), backgroundColor: METER_COLORS.flat3solar, borderRadius:4, maxBarThickness:26 }
+          { label: 'Solar fed into network', data: exported.map(function(s){return s.value;}), backgroundColor: METER_COLORS.flat3solar, borderRadius:4, maxBarThickness:26 }
         ]
       },
       options: chartOptions(buckets, ' kWh')
+    });
+
+    renderSolarStats(cons, exported, generated);
+    renderEfficiencyChart(buckets, cons, exported, generated);
+  }
+
+  function renderSolarStats(cons, exported, generated){
+    var wrap = document.getElementById('zt-solar-stats');
+    var totalGen = 0, totalCons = 0, totalSelfConsumed = 0, anyCovered = false;
+    for (var i=0; i<cons.length; i++){
+      var c = cons[i].value, e = exported[i].value, g = generated[i].value;
+      if (c !== null) totalCons += c;
+      if (g !== null) totalGen += g;
+      if (g !== null && e !== null){ totalSelfConsumed += Math.max(0, g - e); anyCovered = true; }
+    }
+    if (!anyCovered || totalGen === 0){
+      wrap.innerHTML = '';
+      return;
+    }
+    var selfConsumptionRate = totalGen > 0 ? (totalSelfConsumed / totalGen * 100) : null;
+    var selfSufficiencyRate = totalCons > 0 ? (totalSelfConsumed / totalCons * 100) : null;
+    var price = DATA.settings.pricePerKwh;
+
+    var cards = [
+      { label: 'Generated', value: totalGen.toFixed(1), unit: 'kWh', sub: 'over the selected range' },
+      { label: 'Self-consumed', value: totalSelfConsumed.toFixed(1), unit: 'kWh', sub: 'generated \u2212 fed into network' },
+      { label: 'Self-consumption rate', value: selfConsumptionRate!=null ? selfConsumptionRate.toFixed(0) : '—', unit: '%', sub: 'of generation actually used' },
+      { label: 'Self-sufficiency', value: selfSufficiencyRate!=null ? selfSufficiencyRate.toFixed(0) : '—', unit: '%', sub: 'of Flat 3\u2019s usage from solar' }
+    ];
+    if (price){
+      cards.push({ label: 'Est. saved', value: (totalSelfConsumed*price).toFixed(2), unit: '\u20ac', sub: 'at \u20ac' + price + '/kWh' });
+    }
+    wrap.innerHTML = cards.map(function(c){
+      return '<div class="zt-stat-card"><div class="zt-stat-label">' + c.label + '</div>' +
+        '<div class="zt-stat-value">' + c.value + '<span class="unit">' + c.unit + '</span></div>' +
+        '<div class="zt-stat-sub">' + c.sub + '</div></div>';
+    }).join('');
+  }
+
+  function renderEfficiencyChart(buckets, cons, exported, generated){
+    var ctx = document.getElementById('zt-chart-efficiency');
+    var hasAny = cons.some(function(s,i){ return s.value!==null && exported[i].value!==null && generated[i].value!==null; });
+    document.getElementById('zt-efficiency-empty').style.display = hasAny ? 'none' : 'block';
+
+    var solarCovered = [], gridDrawn = [], genValues = [];
+    for (var i=0; i<cons.length; i++){
+      var c = cons[i].value, e = exported[i].value, g = generated[i].value;
+      var selfConsumed = (g !== null && e !== null) ? Math.max(0, g - e) : null;
+      if (c === null){ solarCovered.push(null); gridDrawn.push(null); }
+      else {
+        var covered = selfConsumed !== null ? Math.min(c, selfConsumed) : 0;
+        solarCovered.push(Math.round(covered*10)/10);
+        gridDrawn.push(Math.round((c-covered)*10)/10);
+      }
+      genValues.push(g);
+    }
+
+    if (chartEfficiency) chartEfficiency.destroy();
+    chartEfficiency = new Chart(ctx, {
+      data: {
+        labels: buckets.map(function(b){return b.label;}),
+        datasets: [
+          { type:'bar', label:'Solar-covered', data: solarCovered, backgroundColor: METER_COLORS.flat3gen, stack:'cons', borderRadius:4, maxBarThickness:26 },
+          { type:'bar', label:'Grid-drawn', data: gridDrawn, backgroundColor: METER_COLORS.flat3, stack:'cons', borderRadius:4, maxBarThickness:26 },
+          { type:'line', label:'Total generated', data: genValues, borderColor:'#B7EE8A', borderDash:[5,3], borderWidth:2, pointRadius:3, tension:0, fill:false }
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        interaction:{ mode:'index', intersect:false },
+        plugins:{
+          legend:{ labels:{ color:'#8B95A0', font:{ family:'IBM Plex Mono', size:11 }, boxWidth:10, boxHeight:10 } },
+          tooltip:{
+            backgroundColor:'#0F1417', borderColor:'#333B40', borderWidth:1, titleColor:'#ECEAE3', bodyColor:'#ECEAE3',
+            titleFont:{ family:'IBM Plex Mono' }, bodyFont:{ family:'IBM Plex Mono' },
+            callbacks:{
+              title: function(items){ var idx = items[0].dataIndex; return buckets[idx] ? buckets[idx].rangeLabel : ''; },
+              label: function(item){
+                var v = item.raw;
+                if (v===null || v===undefined) return item.dataset.label + ': no data';
+                return item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' kWh';
+              }
+            }
+          }
+        },
+        scales:{
+          x:{ stacked:true, ticks:{ color:'#5C6670', font:{ family:'IBM Plex Mono', size:10.5 } }, grid:{ color:'#242A2E' } },
+          y:{ stacked:true, beginAtZero:true, ticks:{ color:'#5C6670', font:{ family:'IBM Plex Mono', size:10.5 } }, grid:{ color:'#242A2E' } }
+        }
+      }
     });
   }
 
@@ -1126,9 +1233,12 @@ let unsubscribeSnapshot = null;
     }).join('');
     overlay.innerHTML =
       '<div class="zt-modal">' +
-        '<h3>Rename flats</h3>' +
+        '<h3>Settings</h3>' +
         '<p class="zt-modal-sub">These names are just labels — your readings stay attached to the same meter.</p>' +
         fields +
+        '<div class="zt-field"><label>Electricity price (€ / kWh, optional)</label>' +
+          '<input type="number" step="0.01" min="0" id="zt-price-input" placeholder="e.g. 0.32" value="' + (DATA.settings.pricePerKwh != null ? DATA.settings.pricePerKwh : '') + '"></div>' +
+        '<div class="zt-hint">Used only to estimate money saved by self-consumed solar generation. Leave blank to hide that figure.</div>' +
         '<div class="zt-modal-actions">' +
           '<button class="zt-btn zt-btn-ghost" id="zt-settings-cancel">Cancel</button>' +
           '<button class="zt-btn zt-btn-primary" id="zt-settings-save">Save</button>' +
@@ -1144,7 +1254,9 @@ let unsubscribeSnapshot = null;
         var v = inp.value.trim();
         if (v) DATA.meters[id].name = v;
       });
-      saveData().then(function(){ overlay.remove(); unlockScroll(); renderAll(); toast('Names updated.'); });
+      var priceVal = parseFloat(overlay.querySelector('#zt-price-input').value);
+      DATA.settings.pricePerKwh = isNaN(priceVal) ? null : priceVal;
+      saveData().then(function(){ overlay.remove(); unlockScroll(); renderAll(); toast('Settings updated.'); });
     });
   }
 
@@ -1194,6 +1306,25 @@ let unsubscribeSnapshot = null;
       if (!d.meters[id]) d.meters[id] = def.meters[id];
       if (!d.readings[id]) d.readings[id] = [];
     });
+    if (!d.settings) d.settings = def.settings;
+    if (d.settings.pricePerKwh === undefined) d.settings.pricePerKwh = null;
+
+    // One-time cleanup: earlier versions of the Solarman sync script wrote
+    // total-generation figures into the flat3solar (grid feed-in) meter by
+    // mistake. Move anything tagged as Solarman-synced over to flat3gen,
+    // where it actually belongs.
+    var stillFeedIn = [];
+    (d.readings.flat3solar || []).forEach(function(r){
+      if (r.note && r.note.indexOf('Synced from Solarman') === 0){
+        if (!d.readings.flat3gen.some(function(g){ return g.date === r.date; })){
+          d.readings.flat3gen.push(r);
+        }
+      } else {
+        stillFeedIn.push(r);
+      }
+    });
+    d.readings.flat3solar = stillFeedIn;
+
     return d;
   }
 
