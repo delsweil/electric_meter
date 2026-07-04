@@ -945,49 +945,81 @@ let unsubscribeSnapshot = null;
   }
 
   // ---------- batch photo import ----------
+  // ---------- meter prediction (for batch import) ----------
+  var METER_MATCH_THRESHOLD = 0.15; // max relative difference to count as a confident match
+
+  function expectedValueForMeter(sortedReadings, targetTime){
+    if (!sortedReadings.length) return null;
+    if (sortedReadings.length === 1) return sortedReadings[0].value;
+    for (var i=0; i<sortedReadings.length-1; i++){
+      var t1 = parseDate(sortedReadings[i].date).getTime();
+      var t2 = parseDate(sortedReadings[i+1].date).getTime();
+      if (targetTime >= t1 && targetTime <= t2){
+        if (t2 === t1) return sortedReadings[i].value;
+        var frac = (targetTime - t1) / (t2 - t1);
+        return sortedReadings[i].value + frac * (sortedReadings[i+1].value - sortedReadings[i].value);
+      }
+    }
+    var first = sortedReadings[0], last = sortedReadings[sortedReadings.length-1];
+    var ft = parseDate(first.date).getTime(), lt = parseDate(last.date).getTime();
+    if (lt === ft) return first.value;
+    var rate = (last.value - first.value) / (lt - ft);
+    if (targetTime < ft) return first.value + rate * (targetTime - ft);
+    return last.value + rate * (targetTime - lt);
+  }
+
+  function predictMeter(candidateValue, dateStr){
+    if (candidateValue == null || isNaN(candidateValue) || !dateStr) return null;
+    var targetTime = parseDate(dateStr).getTime();
+    var best = null, bestScore = Infinity;
+    METER_ORDER.forEach(function(id){
+      var sorted = (DATA.readings[id]||[]).slice().sort(function(a,b){ return parseDate(a.date)-parseDate(b.date); });
+      var expected = expectedValueForMeter(sorted, targetTime);
+      if (expected === null) return;
+      var diff = Math.abs(candidateValue - expected);
+      var relDiff = expected !== 0 ? diff / Math.abs(expected) : diff;
+      if (relDiff < bestScore){ bestScore = relDiff; best = id; }
+    });
+    return (best !== null && bestScore <= METER_MATCH_THRESHOLD) ? best : null;
+  }
+
+
   function openBatchImport(fileList){
     var queue = Array.prototype.slice.call(fileList);
     if (!queue.length) return;
-    var batchMeter = null;
+    var lastUsedMeter = null;
     var overlay = document.createElement('div');
     overlay.className = 'zt-overlay';
     document.body.appendChild(overlay);
     lockScroll();
 
-    renderMeterStep();
-
-    function renderMeterStep(){
-      var meterButtons = METER_ORDER.map(function(id){
-        return '<button type="button" data-meter="' + id + '">' + escapeHtml(DATA.meters[id].name) + '</button>';
+    function renderMeterButtons(selected){
+      return METER_ORDER.map(function(id){
+        return '<button type="button" data-meter="' + id + '" class="' + (id===selected?'active':'') + '">' + escapeHtml(DATA.meters[id].name) + '</button>';
       }).join('');
-      overlay.innerHTML =
-        '<div class="zt-modal">' +
-          '<h3>Import ' + queue.length + ' photo' + (queue.length>1?'s':'') + '</h3>' +
-          '<p class="zt-modal-sub">Which meter are all of these photos of? You\'ll confirm the date and reading for each one next.</p>' +
-          '<div class="zt-meter-pick">' + meterButtons + '</div>' +
-          '<div class="zt-modal-actions"><button class="zt-btn zt-btn-ghost" id="zt-batch-cancel">Cancel</button></div>' +
-        '</div>';
-      overlay.querySelectorAll('.zt-meter-pick button').forEach(function(btn){
-        btn.addEventListener('click', function(){ batchMeter = btn.getAttribute('data-meter'); showPhoto(0); });
-      });
-      overlay.querySelector('#zt-batch-cancel').addEventListener('click', function(){ overlay.remove(); unlockScroll(); });
     }
 
     function showPhoto(i){
       if (i >= queue.length){
         overlay.remove();
         unlockScroll();
-        activeHistoryMeter = batchMeter;
+        if (lastUsedMeter) activeHistoryMeter = lastUsedMeter;
         renderAll();
         toast('Import finished.');
         return;
       }
       var file = queue[i];
       var objectUrl = URL.createObjectURL(file);
+      var currentMeter = lastUsedMeter;
+      var userPickedMeter = false;
+      var ocrValue = null;
+      var currentDate = null;
+
       overlay.innerHTML =
         '<div class="zt-modal">' +
           '<h3>Photo ' + (i+1) + ' of ' + queue.length + '</h3>' +
-          '<p class="zt-modal-sub">' + escapeHtml(DATA.meters[batchMeter].name) + '</p>' +
+          '<div class="zt-field"><label>Meter</label><div class="zt-meter-pick" id="zt-batch-meter-pick">' + renderMeterButtons(currentMeter) + '</div></div>' +
+          '<div class="zt-hint" id="zt-batch-meter-hint">' + (currentMeter ? 'Using the last flat you picked \u2014 tap a different one if needed.' : 'Pick which flat this photo is of, or wait \u2014 we\u2019ll guess once the reading and date are in.') + '</div>' +
           '<div class="zt-photo-preview"><img src="' + objectUrl + '" id="zt-batch-img"></div>' +
           '<div class="zt-field"><label>Reading (kWh)</label><input type="number" step="0.1" id="zt-batch-value" placeholder="e.g. 4821.6"></div>' +
           '<div class="zt-hint" id="zt-batch-ocr-hint">Reading the display\u2026</div>' +
@@ -999,6 +1031,31 @@ let unsubscribeSnapshot = null;
           '</div>' +
         '</div>';
 
+      function wireMeterPicker(){
+        overlay.querySelectorAll('#zt-batch-meter-pick button').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            currentMeter = btn.getAttribute('data-meter');
+            userPickedMeter = true;
+            overlay.querySelectorAll('#zt-batch-meter-pick button').forEach(function(b){ b.classList.remove('active'); });
+            btn.classList.add('active');
+            overlay.querySelector('#zt-batch-meter-hint').textContent = 'Selected manually.';
+          });
+        });
+      }
+      wireMeterPicker();
+
+      function maybePredict(){
+        if (userPickedMeter || ocrValue === null || !currentDate) return;
+        var guess = predictMeter(ocrValue, currentDate);
+        if (guess && guess !== currentMeter){
+          currentMeter = guess;
+          var pickWrap = overlay.querySelector('#zt-batch-meter-pick');
+          if (pickWrap){ pickWrap.innerHTML = renderMeterButtons(currentMeter); wireMeterPicker(); }
+          var mh = overlay.querySelector('#zt-batch-meter-hint');
+          if (mh) mh.textContent = 'Best match based on the reading and date \u2014 tap a different flat if this is wrong.';
+        }
+      }
+
       overlay.querySelector('#zt-batch-img').addEventListener('click', function(){ openLightbox(objectUrl); });
 
       var valueInput = overlay.querySelector('#zt-batch-value');
@@ -1006,24 +1063,36 @@ let unsubscribeSnapshot = null;
       runOCR(file).then(function(guess){
         if (guess){
           valueInput.value = guess;
+          ocrValue = parseFloat(guess);
           ocrHint.textContent = 'OCR guess \u2014 check this against the photo before saving.';
         } else {
           ocrHint.textContent = 'Couldn\u2019t confidently read a number \u2014 please type it in.';
         }
+        maybePredict();
+      });
+      valueInput.addEventListener('input', function(){
+        var v = parseFloat(valueInput.value);
+        ocrValue = isNaN(v) ? null : v;
+        maybePredict();
       });
 
       var dateInput = overlay.querySelector('#zt-batch-date');
-      var hint = overlay.querySelector('#zt-batch-date-hint');
+      var dateHint = overlay.querySelector('#zt-batch-date-hint');
       readExifDate(file).then(function(exifDate){
         if (exifDate){
           dateInput.value = exifDate;
-          hint.textContent = 'Date read from the photo\u2019s metadata \u2014 double-check it, then adjust if needed.';
+          currentDate = exifDate;
+          dateHint.textContent = 'Date read from the photo\u2019s metadata \u2014 double-check it, then adjust if needed.';
         } else {
           var fallback = new Date(file.lastModified);
-          dateInput.value = fallback.getFullYear() + '-' + String(fallback.getMonth()+1).padStart(2,'0') + '-' + String(fallback.getDate()).padStart(2,'0');
-          hint.textContent = 'No photo metadata found \u2014 using the file\u2019s last-modified date instead. Please check it.';
+          var fb = fallback.getFullYear() + '-' + String(fallback.getMonth()+1).padStart(2,'0') + '-' + String(fallback.getDate()).padStart(2,'0');
+          dateInput.value = fb;
+          currentDate = fb;
+          dateHint.textContent = 'No photo metadata found \u2014 using the file\u2019s last-modified date instead. Please check it.';
         }
+        maybePredict();
       });
+      dateInput.addEventListener('change', function(){ currentDate = dateInput.value; maybePredict(); });
 
       overlay.querySelector('#zt-batch-skip').addEventListener('click', function(){
         URL.revokeObjectURL(objectUrl);
@@ -1031,16 +1100,20 @@ let unsubscribeSnapshot = null;
       });
       overlay.querySelector('#zt-batch-save').addEventListener('click', function(){
         var v = parseFloat(overlay.querySelector('#zt-batch-value').value);
-        var d = dateInput.value;
+        var d = overlay.querySelector('#zt-batch-date').value;
+        if (!currentMeter){ toast('Pick which flat this photo is of.'); return; }
         if (isNaN(v)){ toast('Enter a reading value.'); return; }
         if (!d){ toast('Pick a date.'); return; }
-        DATA.readings[batchMeter].push({ id: uid(), value:v, date:d, note:'' });
+        DATA.readings[currentMeter].push({ id: uid(), value:v, date:d, note:'' });
+        lastUsedMeter = currentMeter;
         saveData().then(function(){
           URL.revokeObjectURL(objectUrl);
           showPhoto(i+1);
         });
       });
     }
+
+    showPhoto(0);
   }
 
   // ---------- settings modal ----------
