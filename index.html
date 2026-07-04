@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stromverbrauch — Meter Log</title>
+<style>
+body { margin:0; background:#14181B; }
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+#zt-root {
+  --bg: #14181B;
+  --panel: #1D2327;
+  --panel-2: #232A2F;
+  --border: #333B40;
+  --border-soft: #2A3136;
+  --text: #ECEAE3;
+  --text-dim: #8B95A0;
+  --text-faint: #5C6670;
+  --amber: #FFB020;
+  --amber-soft: rgba(255,176,32,.14);
+  --orange: #FF7A45;
+  --rust: #E8543E;
+  --teal: #4FD1C5;
+  --teal-soft: rgba(79,209,197,.14);
+  --danger: #E8543E;
+  --radius: 10px;
+  --radius-lg: 14px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 16px;
+  padding: 0;
+  max-width: 980px;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+#zt-root *, #zt-root *::before, #zt-root *::after { box-sizing: border-box; }
+#zt-root .mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+
+.zt-shell { padding: 22px 20px 32px; }
+
+/* ---- Header ---- */
+.zt-header { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:22px; flex-wrap:wrap; }
+.zt-title-block .zt-eyebrow { font-family:'IBM Plex Mono'; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color: var(--amber); margin:0 0 4px; }
+.zt-title-block h1 { font-size:22px; margin:0 0 4px; font-weight:700; letter-spacing:-.01em; }
+.zt-title-block p { margin:0; color:var(--text-dim); font-size:13px; }
+.zt-header-actions { display:flex; gap:8px; }
+
+.zt-btn {
+  font-family:'IBM Plex Sans'; font-size:13px; font-weight:600; border-radius:8px; border:1px solid var(--border);
+  background: var(--panel); color: var(--text); padding:9px 14px; cursor:pointer; display:inline-flex; align-items:center; gap:6px;
+  transition: border-color .15s ease, background .15s ease, transform .1s ease;
+}
+.zt-btn:hover { border-color:#4A555C; background: var(--panel-2); }
+.zt-btn:active { transform: translateY(1px); }
+.zt-btn-primary { background: var(--amber); color:#1B1300; border-color: var(--amber); }
+.zt-btn-primary:hover { background:#FFC04D; border-color:#FFC04D; }
+.zt-btn-ghost { background:transparent; border-color:transparent; color:var(--text-dim); padding:9px 10px; }
+.zt-btn-ghost:hover { color:var(--text); background: var(--panel); }
+.zt-btn-sm { padding:6px 10px; font-size:12px; }
+.zt-btn-icon { padding:7px 9px; }
+.zt-btn[disabled] { opacity:.4; cursor:not-allowed; }
+
+/* ---- Meter cards ---- */
+.zt-meter-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:12px; margin-bottom:26px; }
+.zt-card {
+  background: var(--panel); border:1px solid var(--border-soft); border-radius: var(--radius-lg);
+  padding:16px; position:relative; overflow:hidden;
+}
+.zt-card::before, .zt-card::after {
+  content:''; position:absolute; width:6px; height:6px; border-radius:50%; background:#0E1113; top:9px; box-shadow: inset 0 0 0 1px #3a4349;
+}
+.zt-card::before { left:9px; } .zt-card::after { right:9px; }
+.zt-card-name { font-size:12.5px; font-weight:600; color:var(--text); margin:2px 0 2px; padding-right:8px; }
+.zt-card-kind { font-family:'IBM Plex Mono'; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-faint); margin-bottom:10px; display:flex; align-items:center; gap:5px; }
+.zt-dot { width:6px; height:6px; border-radius:50%; display:inline-block; }
+.zt-led {
+  background:#0D1012; border:1px solid #000; border-radius:7px; padding:9px 10px; margin-bottom:10px;
+  box-shadow: inset 0 0 10px rgba(0,0,0,.65);
+}
+.zt-led .val { font-family:'IBM Plex Mono'; font-weight:600; font-size:22px; letter-spacing:.5px; }
+.zt-led .unit { font-family:'IBM Plex Mono'; font-size:11px; margin-left:4px; opacity:.75; }
+.zt-led.amber .val, .zt-led.amber .unit { color: var(--amber); text-shadow:0 0 9px rgba(255,176,32,.5); }
+.zt-led.teal .val, .zt-led.teal .unit { color: var(--teal); text-shadow:0 0 9px rgba(79,209,197,.5); }
+.zt-led.empty .val { color: var(--text-faint); text-shadow:none; font-size:14px; font-weight:400; }
+.zt-card-meta { font-size:11px; color: var(--text-dim); margin-bottom:12px; min-height:14px; }
+.zt-card-meta .warn { color: var(--rust); }
+.zt-card-btn { width:100%; }
+
+/* ---- Section headers ---- */
+.zt-section { margin-bottom:28px; }
+.zt-section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.zt-section-head h2 { font-size:15px; margin:0; font-weight:700; }
+.zt-section-sub { font-size:12px; color:var(--text-faint); margin-top:2px; }
+
+.zt-controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.zt-segmented { display:inline-flex; background: var(--panel); border:1px solid var(--border-soft); border-radius:8px; padding:2px; }
+.zt-segmented button {
+  font-family:'IBM Plex Mono'; font-size:11.5px; font-weight:600; border:none; background:transparent; color:var(--text-dim);
+  padding:6px 11px; border-radius:6px; cursor:pointer; letter-spacing:.02em;
+}
+.zt-segmented button.active { background: var(--amber); color:#1B1300; }
+.zt-select {
+  font-family:'IBM Plex Sans'; font-size:12.5px; background: var(--panel); color: var(--text); border:1px solid var(--border-soft);
+  border-radius:8px; padding:7px 10px; cursor:pointer;
+}
+
+.zt-chart-card { background: var(--panel); border:1px solid var(--border-soft); border-radius: var(--radius-lg); padding:16px; }
+.zt-chart-wrap { position:relative; height:260px; }
+.zt-empty-note { font-size:11.5px; color: var(--text-faint); margin-top:10px; }
+
+/* ---- History ---- */
+.zt-history-tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.zt-tab { font-family:'IBM Plex Mono'; font-size:11.5px; padding:6px 11px; border-radius:7px; border:1px solid var(--border-soft); background:var(--panel); color:var(--text-dim); cursor:pointer; }
+.zt-tab.active { border-color: var(--amber); color: var(--amber); background: var(--amber-soft); }
+.zt-table-wrap { background: var(--panel); border:1px solid var(--border-soft); border-radius: var(--radius-lg); overflow:hidden; }
+table.zt-table { width:100%; border-collapse:collapse; font-size:13px; }
+table.zt-table th { text-align:left; font-family:'IBM Plex Mono'; font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); padding:10px 14px; border-bottom:1px solid var(--border-soft); font-weight:600; }
+table.zt-table td { padding:10px 14px; border-bottom:1px solid var(--border-soft); color:var(--text); }
+table.zt-table tr:last-child td { border-bottom:none; }
+table.zt-table td.num { font-family:'IBM Plex Mono'; }
+table.zt-table td.note { color:var(--text-dim); font-size:12px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
+.zt-empty-row { padding:26px 14px; text-align:center; color:var(--text-faint); font-size:13px; }
+.warn-badge { color: var(--rust); font-size:11px; margin-left:6px; }
+
+/* ---- Modal ---- */
+.zt-overlay { position:fixed; inset:0; background:rgba(8,10,11,.72); display:flex; align-items:center; justify-content:center; z-index:1000; padding:16px; backdrop-filter: blur(2px); }
+.zt-modal { background: var(--panel); border:1px solid var(--border-soft); border-radius: var(--radius-lg); width:100%; max-width:440px; max-height:90vh; overflow-y:auto; padding:20px; }
+.zt-modal h3 { margin:0 0 4px; font-size:16px; }
+.zt-modal .zt-modal-sub { color:var(--text-dim); font-size:12px; margin:0 0 16px; }
+.zt-field { margin-bottom:14px; }
+.zt-field label { display:block; font-size:11.5px; font-weight:600; color:var(--text-dim); margin-bottom:6px; text-transform:uppercase; letter-spacing:.04em; }
+.zt-field input[type=text], .zt-field input[type=date], .zt-field input[type=number], .zt-field textarea {
+  width:100%; background:#0F1417; border:1px solid var(--border); border-radius:8px; color:var(--text); padding:10px 11px; font-size:14px; font-family:'IBM Plex Sans';
+}
+.zt-field input[type=number] { font-family:'IBM Plex Mono'; font-size:18px; font-weight:600; }
+.zt-field textarea { resize:vertical; min-height:44px; font-size:13px; }
+.zt-meter-pick { display:flex; gap:6px; flex-wrap:wrap; }
+.zt-meter-pick button { flex:1 1 auto; font-size:12px; padding:8px 10px; border-radius:8px; border:1px solid var(--border-soft); background:#181D20; color:var(--text-dim); cursor:pointer; font-weight:600; }
+.zt-meter-pick button.active { border-color: var(--amber); color: var(--amber); background: var(--amber-soft); }
+.zt-photo-drop {
+  border:1.5px dashed var(--border); border-radius:10px; padding:18px; text-align:center; cursor:pointer; color:var(--text-dim); font-size:12.5px;
+}
+.zt-photo-drop:hover { border-color: var(--amber); color: var(--text); }
+.zt-photo-preview { position:relative; border-radius:10px; overflow:hidden; border:1px solid var(--border); }
+.zt-photo-preview img { width:100%; max-height:320px; object-fit:contain; background:#0B0E10; display:block; cursor:zoom-in; }
+.zt-photo-preview .remove-photo { position:absolute; top:8px; right:8px; }
+.zt-hint { font-size:11px; color: var(--text-faint); margin-top:6px; line-height:1.5; }
+.zt-warn-box { background: rgba(232,84,62,.12); border:1px solid rgba(232,84,62,.35); color:#FF9C8C; font-size:12px; padding:8px 10px; border-radius:8px; margin-bottom:14px; }
+.zt-modal-actions { display:flex; gap:8px; margin-top:6px; }
+.zt-modal-actions .zt-btn { flex:1; justify-content:center; }
+.zt-lightbox { position:fixed; inset:0; background:rgba(4,5,6,.92); z-index:1100; display:flex; align-items:center; justify-content:center; padding:20px; }
+.zt-lightbox img { max-width:100%; max-height:100%; object-fit:contain; }
+.zt-lightbox-close { position:absolute; top:16px; right:16px; }
+
+.zt-toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#20262A; border:1px solid var(--border); color:var(--text); padding:10px 16px; border-radius:8px; font-size:13px; z-index:1200; box-shadow:0 6px 20px rgba(0,0,0,.4); }
+
+.zt-legend { display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; }
+.zt-legend-item { display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--text-dim); }
+.zt-legend-swatch { width:10px; height:10px; border-radius:3px; }
+
+@media (max-width:560px) {
+  .zt-shell { padding:16px 12px 26px; }
+  .zt-header { flex-direction:column; align-items:flex-start; }
+}
+
+.zt-authgate { min-height: 320px; display:flex; align-items:center; justify-content:center; padding:40px 20px; font-family:'IBM Plex Sans'; background:#14181B; }
+.zt-authgate-card { background:#1D2327; border:1px solid #333B40; border-radius:14px; padding:28px; max-width:340px; text-align:center; }
+.zt-authgate-card h2 { color:#ECEAE3; font-size:16px; margin:0 0 6px; }
+.zt-authgate-card p { color:#8B95A0; font-size:12.5px; margin:0 0 18px; line-height:1.5; }
+.zt-google-btn { display:inline-flex; align-items:center; gap:8px; background:#ECEAE3; color:#1B1300; border:none; border-radius:8px; padding:10px 16px; font-weight:600; font-size:13px; cursor:pointer; }
+.zt-google-btn:hover { background:#fff; }
+.zt-authgate-err { color:#FF9C8C; font-size:12px; margin-top:12px; display:none; }
+.zt-userbar { display:flex; align-items:center; gap:8px; font-size:11.5px; color:#8B95A0; }
+.zt-userbar button { background:none; border:none; color:#8B95A0; text-decoration:underline; cursor:pointer; font-size:11.5px; padding:0; }
+</style>
+</head>
+<body>
+
+<div class="zt-authgate" id="zt-auth-gate">
+  <div class="zt-authgate-card">
+    <h2>Stromverbrauch</h2>
+    <p>Sign in with the Google account this tracker is locked to, so your readings stay private.</p>
+    <button class="zt-google-btn" id="zt-signin-btn">Sign in with Google</button>
+    <div class="zt-authgate-err" id="zt-auth-err">That account isn't authorized for this tracker.</div>
+  </div>
+</div>
+
+<div id="zt-root" style="display:none;">
+  <div class="zt-shell">
+    <div class="zt-header">
+      <div class="zt-title-block">
+        <p class="zt-eyebrow">Zählerstand · Meter Log</p>
+        <h1>Stromverbrauch</h1>
+        <p>Manual readings from photos, prorated across time so sparse check-ins still show a real trend.</p>
+      </div>
+      <div class="zt-header-actions">
+        <span class="zt-userbar" id="zt-userbar"></span>
+        <button class="zt-btn zt-btn-ghost" id="zt-btn-export">Export CSV</button>
+        <button class="zt-btn zt-btn-ghost" id="zt-btn-settings">Rename flats</button>
+        <button class="zt-btn zt-btn-primary" id="zt-btn-add-global">+ Add reading</button>
+      </div>
+    </div>
+
+    <div class="zt-meter-grid" id="zt-meter-grid"></div>
+
+    <div class="zt-section">
+      <div class="zt-section-head">
+        <div>
+          <h2>Usage by period</h2>
+          <div class="zt-section-sub">Consumption between photos is spread evenly across the days in between, then summed per period.</div>
+        </div>
+        <div class="zt-controls">
+          <div class="zt-segmented" id="zt-granularity"></div>
+          <select class="zt-select" id="zt-range"></select>
+        </div>
+      </div>
+      <div class="zt-chart-card">
+        <div class="zt-chart-wrap"><canvas id="zt-chart-compare"></canvas></div>
+        <div class="zt-empty-note" id="zt-compare-empty" style="display:none;">Add at least two readings for a flat to see estimated usage per period.</div>
+        <div class="zt-empty-note">The most recent period stays empty until a new reading closes it off.</div>
+      </div>
+    </div>
+
+    <div class="zt-section" id="zt-solar-section">
+      <div class="zt-section-head">
+        <div>
+          <h2>Balcony solar — Flat 3</h2>
+          <div class="zt-section-sub">Consumption vs. fed-in generation, same periods as above.</div>
+        </div>
+      </div>
+      <div class="zt-chart-card">
+        <div class="zt-chart-wrap"><canvas id="zt-chart-solar"></canvas></div>
+        <div class="zt-empty-note" id="zt-solar-empty" style="display:none;">Add readings for Flat 3 and its solar meter to compare them here.</div>
+      </div>
+    </div>
+
+    <div class="zt-section">
+      <div class="zt-section-head">
+        <div>
+          <h2>Raw meter readings</h2>
+          <div class="zt-section-sub">The actual numbers you logged, cumulative — useful for sanity-checking the chart above.</div>
+        </div>
+      </div>
+      <div class="zt-chart-card">
+        <div class="zt-chart-wrap"><canvas id="zt-chart-raw"></canvas></div>
+      </div>
+    </div>
+
+    <div class="zt-section">
+      <div class="zt-section-head">
+        <div><h2>History</h2></div>
+      </div>
+      <div class="zt-history-tabs" id="zt-history-tabs"></div>
+      <div class="zt-table-wrap">
+        <table class="zt-table">
+          <thead>
+            <tr><th>Date</th><th>Reading</th><th>Δ since last</th><th>Note</th><th></th></tr>
+          </thead>
+          <tbody id="zt-history-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
+<script type="module">
+import { initializeApp } from 'https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-auth.js';
+import { getFirestore, doc, setDoc, onSnapshot } from 'https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-firestore.js';
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-analytics.js";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDl7hZPhvZUpPyzjheG8NEEmmmvsFrox18",
+  authDomain: "electric-meter-fa12c.firebaseapp.com",
+  projectId: "electric-meter-fa12c",
+  storageBucket: "electric-meter-fa12c.firebasestorage.app",
+  messagingSenderId: "281146893994",
+  appId: "1:281146893994:web:bc3a5a9a51c6fe894b52d3",
+  measurementId: "G-3WD8T2620F"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
+const ALLOWED_EMAIL = "david@elsweiler.co.uk";
+
+
+const auth = getAuth(fbApp);
+const db = getFirestore(fbApp);
+const docRef = doc(db, 'trackerData', 'main');
+let unsubscribeSnapshot = null;
+
+  var METER_COLORS = { flat1:'#FFB020', flat2:'#FF7A45', flat3:'#E8543E', flat3solar:'#4FD1C5' };
+
+  function defaultData(){
+    return {
+      meters: {
+        flat1: { name:'Flat 1', kind:'consumption' },
+        flat2: { name:'Flat 2', kind:'consumption' },
+        flat3: { name:'Flat 3', kind:'consumption' },
+        flat3solar: { name:'Flat 3 · Solar feed-in', kind:'generation' }
+      },
+      readings: { flat1:[], flat2:[], flat3:[], flat3solar:[] }
+    };
+  }
+
+  var DATA = null;
+  var granularity = 'week';
+  var rangeCount = 10;
+  var activeHistoryMeter = 'flat1';
+  var chartCompare = null, chartSolar = null, chartRaw = null;
+  var pendingPhotoDataUrl = null;
+  var editingId = null;
+
+  // ---------- storage (Firestore) ----------
+  function saveData(){
+    return setDoc(docRef, DATA).catch(function(e){
+      console.error('firestore set failed', e);
+      toast('Could not save. Check your connection and try again.');
+    });
+  }
+
+  function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+
+  function toast(msg){
+    var el = document.createElement('div');
+    el.className = 'zt-toast';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function(){ el.remove(); }, 2600);
+  }
+
+  // ---------- date helpers ----------
+  function parseDate(s){ return new Date(s + 'T00:00:00'); }
+  function todayStr(){
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  }
+  function addDays(d,n){ var r = new Date(d); r.setDate(r.getDate()+n); return r; }
+  function addMonths(d,n){ var r = new Date(d); r.setMonth(r.getMonth()+n); return r; }
+  function startOfWeek(d){ var r = new Date(d.getFullYear(), d.getMonth(), d.getDate()); var day = (r.getDay()+6)%7; r.setDate(r.getDate()-day); return r; }
+  function startOfMonth(d){ return new Date(d.getFullYear(), d.getMonth(), 1); }
+  function isoWeekNum(d){
+    var t = new Date(d.valueOf());
+    var dayNr = (d.getDay()+6)%7;
+    t.setDate(t.getDate() - dayNr + 3);
+    var firstThu = new Date(t.getFullYear(),0,4);
+    var diff = t - firstThu;
+    return 1 + Math.round(diff/(7*86400000));
+  }
+  function fmtShort(d){ return d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'}); }
+  function fmtLong(d){ return d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+
+  function getBuckets(gran, minDate, maxDate, maxCount){
+    var cur, buckets = [];
+    if (gran==='day') cur = new Date(minDate.getFullYear(),minDate.getMonth(),minDate.getDate());
+    else if (gran==='week') cur = startOfWeek(minDate);
+    else cur = startOfMonth(minDate);
+    var guard = 0;
+    while (cur <= maxDate && guard < 400){
+      var next;
+      if (gran==='day') next = addDays(cur,1);
+      else if (gran==='week') next = addDays(cur,7);
+      else next = addMonths(cur,1);
+      var label;
+      if (gran==='day') label = fmtShort(cur);
+      else if (gran==='week') label = 'KW' + isoWeekNum(cur);
+      else label = cur.toLocaleDateString('de-DE',{month:'short',year:'2-digit'});
+      buckets.push({ start:cur, end:next, label:label, rangeLabel: fmtShort(cur) + '–' + fmtShort(addDays(next,-1)) });
+      cur = next;
+      guard++;
+    }
+    if (maxCount && buckets.length > maxCount) buckets = buckets.slice(-maxCount);
+    return buckets;
+  }
+
+  // ---------- prorated usage ----------
+  function prorate(readings, buckets){
+    var sorted = readings.slice().sort(function(a,b){ return parseDate(a.date)-parseDate(b.date); });
+    var out = buckets.map(function(b){ return { start:b.start, end:b.end, label:b.label, rangeLabel:b.rangeLabel, value:0, covered:false }; });
+    for (var i=0;i<sorted.length-1;i++){
+      var r1 = sorted[i], r2 = sorted[i+1];
+      var t1 = parseDate(r1.date).getTime(), t2 = parseDate(r2.date).getTime();
+      var span = t2 - t1;
+      if (span <= 0) continue;
+      var delta = r2.value - r1.value;
+      if (delta < 0) continue; // meter reset / correction — skip this interval
+      var rate = delta / span;
+      for (var j=0;j<out.length;j++){
+        var bs = out[j].start.getTime(), be = out[j].end.getTime();
+        var os = Math.max(t1,bs), oe = Math.min(t2,be);
+        if (oe > os){
+          out[j].value += rate * (oe-os);
+          out[j].covered = true;
+        }
+      }
+    }
+    out.forEach(function(b){ if (!b.covered) b.value = null; else b.value = Math.round(b.value*10)/10; });
+    return out;
+  }
+
+  function allDatesRange(){
+    var minT = null, maxT = null;
+    METER_ORDER.forEach(function(m){
+      (DATA.readings[m]||[]).forEach(function(r){
+        var t = parseDate(r.date).getTime();
+        if (minT===null || t<minT) minT = t;
+        if (maxT===null || t>maxT) maxT = t;
+      });
+    });
+    var today = parseDate(todayStr()).getTime();
+    if (maxT===null || today>maxT) maxT = today;
+    if (minT===null) minT = today;
+    return { min:new Date(minT), max:new Date(maxT) };
+  }
+
+  // ---------- rendering: meter cards ----------
+  function lastReading(meterId){
+    var arr = DATA.readings[meterId]||[];
+    if (!arr.length) return null;
+    return arr.slice().sort(function(a,b){ return parseDate(b.date)-parseDate(a.date); })[0];
+  }
+  function secondLastReading(meterId){
+    var arr = (DATA.readings[meterId]||[]).slice().sort(function(a,b){ return parseDate(b.date)-parseDate(a.date); });
+    return arr.length>1 ? arr[1] : null;
+  }
+
+  function renderMeterCards(){
+    var grid = document.getElementById('zt-meter-grid');
+    grid.innerHTML = '';
+    METER_ORDER.forEach(function(id){
+      var meter = DATA.meters[id];
+      var last = lastReading(id);
+      var prev = secondLastReading(id);
+      var isSolar = meter.kind === 'generation';
+      var card = document.createElement('div');
+      card.className = 'zt-card';
+      var ledClass = isSolar ? 'teal' : 'amber';
+      var ledHtml = last
+        ? '<span class="val">' + last.value.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + '</span><span class="unit">kWh</span>'
+        : '<span class="val">no readings yet</span>';
+      var metaHtml = '';
+      if (last){
+        metaHtml = 'Last: ' + fmtLong(parseDate(last.date));
+        if (prev && last.value < prev.value){
+          metaHtml += ' <span class="warn">⚠ lower than previous</span>';
+        }
+      } else {
+        metaHtml = 'Add a photo to get started';
+      }
+      card.innerHTML =
+        '<div class="zt-card-kind"><span class="zt-dot" style="background:' + METER_COLORS[id] + '"></span>' + (isSolar ? 'Generation' : 'Consumption') + '</div>' +
+        '<div class="zt-card-name">' + escapeHtml(meter.name) + '</div>' +
+        '<div class="zt-led ' + (last?ledClass:'empty') + '">' + ledHtml + '</div>' +
+        '<div class="zt-card-meta">' + metaHtml + '</div>' +
+        '<button class="zt-btn zt-btn-sm zt-card-btn" data-add-meter="' + id + '">+ Add reading</button>';
+      grid.appendChild(card);
+    });
+    grid.querySelectorAll('[data-add-meter]').forEach(function(btn){
+      btn.addEventListener('click', function(){ openReadingModal(btn.getAttribute('data-add-meter')); });
+    });
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  // ---------- granularity / range controls ----------
+  function renderControls(){
+    var gWrap = document.getElementById('zt-granularity');
+    gWrap.innerHTML = '';
+    [['day','Day'],['week','Week'],['month','Month']].forEach(function(pair){
+      var b = document.createElement('button');
+      b.textContent = pair[1];
+      if (pair[0]===granularity) b.className = 'active';
+      b.addEventListener('click', function(){ granularity = pair[0]; syncRangeOptions(); renderCharts(); });
+      gWrap.appendChild(b);
+    });
+    syncRangeOptions();
+  }
+  function syncRangeOptions(){
+    var sel = document.getElementById('zt-range');
+    var opts;
+    if (granularity==='day') opts = [[14,'Last 14'],[30,'Last 30'],[90,'Last 90'],[0,'All']];
+    else if (granularity==='week') opts = [[8,'Last 8'],[13,'Last 13'],[26,'Last 26'],[0,'All']];
+    else opts = [[6,'Last 6'],[12,'Last 12'],[24,'Last 24'],[0,'All']];
+    var prevVal = rangeCount;
+    sel.innerHTML = opts.map(function(o){ return '<option value="'+o[0]+'">'+o[1]+'</option>'; }).join('');
+    var match = opts.find(function(o){ return o[0]===prevVal; });
+    sel.value = match ? String(prevVal) : String(opts[0][0]);
+    rangeCount = parseInt(sel.value,10);
+    sel.onchange = function(){ rangeCount = parseInt(sel.value,10); renderCharts(); };
+  }
+
+  // ---------- charts ----------
+  function renderCharts(){
+    var range = allDatesRange();
+    var buckets = getBuckets(granularity, range.min, range.max, rangeCount || null);
+    renderCompareChart(buckets);
+    renderSolarChart(buckets);
+    renderRawChart();
+  }
+
+  function renderCompareChart(buckets){
+    var ctx = document.getElementById('zt-chart-compare');
+    var flats = ['flat1','flat2','flat3'];
+    var hasAny = flats.some(function(m){ return (DATA.readings[m]||[]).length>=2; });
+    document.getElementById('zt-compare-empty').style.display = hasAny ? 'none' : 'block';
+    var datasets = flats.map(function(m){
+      var series = prorate(DATA.readings[m]||[], buckets);
+      return {
+        label: DATA.meters[m].name,
+        data: series.map(function(s){ return s.value; }),
+        backgroundColor: METER_COLORS[m],
+        borderRadius: 4,
+        maxBarThickness: 26
+      };
+    });
+    if (chartCompare) chartCompare.destroy();
+    chartCompare = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: buckets.map(function(b){return b.label;}), datasets: datasets },
+      options: chartOptions(buckets, ' kWh')
+    });
+  }
+
+  function renderSolarChart(buckets){
+    var ctx = document.getElementById('zt-chart-solar');
+    var hasAny = (DATA.readings.flat3||[]).length>=2 || (DATA.readings.flat3solar||[]).length>=2;
+    document.getElementById('zt-solar-empty').style.display = hasAny ? 'none' : 'block';
+    var cons = prorate(DATA.readings.flat3||[], buckets);
+    var gen = prorate(DATA.readings.flat3solar||[], buckets);
+    if (chartSolar) chartSolar.destroy();
+    chartSolar = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: buckets.map(function(b){return b.label;}),
+        datasets: [
+          { label: 'Flat 3 consumption', data: cons.map(function(s){return s.value;}), backgroundColor: METER_COLORS.flat3, borderRadius:4, maxBarThickness:26 },
+          { label: 'Solar fed into grid', data: gen.map(function(s){return s.value;}), backgroundColor: METER_COLORS.flat3solar, borderRadius:4, maxBarThickness:26 }
+        ]
+      },
+      options: chartOptions(buckets, ' kWh')
+    });
+  }
+
+  function chartOptions(buckets, unitSuffix){
+    return {
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ labels:{ color:'#8B95A0', font:{ family:'IBM Plex Mono', size:11 }, boxWidth:10, boxHeight:10 } },
+        tooltip:{
+          backgroundColor:'#0F1417', borderColor:'#333B40', borderWidth:1, titleColor:'#ECEAE3', bodyColor:'#ECEAE3',
+          titleFont:{ family:'IBM Plex Mono' }, bodyFont:{ family:'IBM Plex Mono' },
+          callbacks:{
+            title: function(items){ var idx = items[0].dataIndex; return buckets[idx] ? buckets[idx].rangeLabel : ''; },
+            label: function(item){
+              var v = item.raw;
+              if (v===null || v===undefined) return item.dataset.label + ': no data';
+              return item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + (unitSuffix||'');
+            }
+          }
+        }
+      },
+      scales:{
+        x:{ ticks:{ color:'#5C6670', font:{ family:'IBM Plex Mono', size:10.5 } }, grid:{ color:'#242A2E' } },
+        y:{ ticks:{ color:'#5C6670', font:{ family:'IBM Plex Mono', size:10.5 } }, grid:{ color:'#242A2E' }, beginAtZero:true }
+      }
+    };
+  }
+
+  function renderRawChart(){
+    var ctx = document.getElementById('zt-chart-raw');
+    var datasets = METER_ORDER.map(function(m){
+      var pts = (DATA.readings[m]||[]).slice().sort(function(a,b){return parseDate(a.date)-parseDate(b.date);})
+        .map(function(r){ return { x: parseDate(r.date).getTime(), y: r.value }; });
+      return {
+        label: DATA.meters[m].name,
+        data: pts,
+        borderColor: METER_COLORS[m],
+        backgroundColor: METER_COLORS[m],
+        borderDash: DATA.meters[m].kind==='generation' ? [5,3] : [],
+        tension: 0, pointRadius: 3, pointHoverRadius: 5, spanGaps:false
+      };
+    });
+    if (chartRaw) chartRaw.destroy();
+    chartRaw = new Chart(ctx, {
+      type:'line',
+      data:{ datasets:datasets },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        interaction:{ mode:'nearest', intersect:true },
+        plugins:{
+          legend:{ labels:{ color:'#8B95A0', font:{ family:'IBM Plex Mono', size:11 }, boxWidth:10, boxHeight:10 } },
+          tooltip:{
+            backgroundColor:'#0F1417', borderColor:'#333B40', borderWidth:1, titleColor:'#ECEAE3', bodyColor:'#ECEAE3',
+            callbacks:{
+              title: function(items){ return new Date(items[0].parsed.x).toLocaleDateString('de-DE'); },
+              label: function(item){ return item.dataset.label + ': ' + item.parsed.y.toLocaleString('de-DE',{minimumFractionDigits:1}) + ' kWh'; }
+            }
+          }
+        },
+        scales:{
+          x:{ type:'linear', ticks:{ color:'#5C6670', font:{family:'IBM Plex Mono',size:10.5}, callback:function(v){ return fmtShort(new Date(v)); } }, grid:{ color:'#242A2E' } },
+          y:{ ticks:{ color:'#5C6670', font:{family:'IBM Plex Mono',size:10.5} }, grid:{ color:'#242A2E' } }
+        }
+      }
+    });
+  }
+
+  // ---------- history ----------
+  function renderHistoryTabs(){
+    var wrap = document.getElementById('zt-history-tabs');
+    wrap.innerHTML = '';
+    METER_ORDER.forEach(function(id){
+      var b = document.createElement('button');
+      b.className = 'zt-tab' + (id===activeHistoryMeter ? ' active' : '');
+      b.textContent = DATA.meters[id].name;
+      b.addEventListener('click', function(){ activeHistoryMeter = id; renderHistoryTabs(); renderHistoryTable(); });
+      wrap.appendChild(b);
+    });
+  }
+  function renderHistoryTable(){
+    var body = document.getElementById('zt-history-body');
+    var arr = (DATA.readings[activeHistoryMeter]||[]).slice().sort(function(a,b){ return parseDate(b.date)-parseDate(a.date); });
+    if (!arr.length){
+      body.innerHTML = '<tr><td colspan="5" class="zt-empty-row">No readings for ' + escapeHtml(DATA.meters[activeHistoryMeter].name) + ' yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = arr.map(function(r, idx){
+      var next = arr[idx+1]; // chronologically previous (since sorted desc)
+      var delta = next ? (r.value - next.value) : null;
+      var deltaHtml = delta===null ? '—' : (delta<0 ? '<span class="warn-badge">' + delta.toFixed(1) + '</span>' : '+' + delta.toFixed(1));
+      return '<tr>' +
+        '<td>' + fmtLong(parseDate(r.date)) + '</td>' +
+        '<td class="num">' + r.value.toLocaleString('de-DE',{minimumFractionDigits:1}) + ' kWh</td>' +
+        '<td class="num">' + deltaHtml + '</td>' +
+        '<td class="note">' + (r.note ? escapeHtml(r.note) : '—') + '</td>' +
+        '<td><div class="row-actions">' +
+          '<button class="zt-btn zt-btn-ghost zt-btn-icon zt-btn-sm" data-edit="' + r.id + '" title="Edit">✎</button>' +
+          '<button class="zt-btn zt-btn-ghost zt-btn-icon zt-btn-sm" data-del="' + r.id + '" title="Delete">🗑</button>' +
+        '</div></td>' +
+      '</tr>';
+    }).join('');
+    body.querySelectorAll('[data-edit]').forEach(function(btn){
+      btn.addEventListener('click', function(){ openReadingModal(activeHistoryMeter, btn.getAttribute('data-edit')); });
+    });
+    body.querySelectorAll('[data-del]').forEach(function(btn){
+      btn.addEventListener('click', function(){ deleteReading(activeHistoryMeter, btn.getAttribute('data-del')); });
+    });
+  }
+
+  function deleteReading(meterId, id){
+    if (!confirm('Delete this reading? This cannot be undone.')) return;
+    DATA.readings[meterId] = (DATA.readings[meterId]||[]).filter(function(r){ return r.id !== id; });
+    saveData().then(function(){ renderAll(); toast('Reading deleted.'); });
+  }
+
+  // ---------- add/edit reading modal ----------
+  function openReadingModal(meterId, editId){
+    editingId = editId || null;
+    pendingPhotoDataUrl = null;
+    var existing = null;
+    if (editingId){
+      existing = (DATA.readings[meterId]||[]).find(function(r){ return r.id===editingId; });
+    }
+    var overlay = document.createElement('div');
+    overlay.className = 'zt-overlay';
+    overlay.id = 'zt-reading-overlay';
+
+    var meterButtons = METER_ORDER.map(function(id){
+      return '<button type="button" data-meter="'+id+'" class="'+(id===meterId?'active':'')+'">'+escapeHtml(DATA.meters[id].name)+'</button>';
+    }).join('');
+
+    overlay.innerHTML =
+      '<div class="zt-modal">' +
+        '<h3>' + (editingId ? 'Edit reading' : 'Add reading') + '</h3>' +
+        '<p class="zt-modal-sub">Snap the meter, zoom in on the photo to read it precisely, then type the number in.</p>' +
+        '<div id="zt-modal-warn"></div>' +
+        '<div class="zt-field">' +
+          '<label>Meter</label>' +
+          '<div class="zt-meter-pick" id="zt-meter-pick">' + meterButtons + '</div>' +
+        '</div>' +
+        '<div class="zt-field">' +
+          '<label>Photo (reference only, not saved)</label>' +
+          '<div id="zt-photo-area">' +
+            '<div class="zt-photo-drop" id="zt-photo-drop">📷 Tap to take or choose a photo</div>' +
+          '</div>' +
+          '<input type="file" accept="image/*" capture="environment" id="zt-photo-input" style="display:none;">' +
+        '</div>' +
+        '<div class="zt-field">' +
+          '<label>Reading (kWh)</label>' +
+          '<input type="number" step="0.1" id="zt-value-input" placeholder="e.g. 4821.6" value="' + (existing ? existing.value : '') + '">' +
+        '</div>' +
+        '<div class="zt-field">' +
+          '<label>Date</label>' +
+          '<input type="date" id="zt-date-input" value="' + (existing ? existing.date : todayStr()) + '" max="' + todayStr() + '">' +
+        '</div>' +
+        '<div class="zt-field">' +
+          '<label>Note (optional)</label>' +
+          '<textarea id="zt-note-input" placeholder="e.g. meter replaced, tenant changed…">' + (existing && existing.note ? escapeHtml(existing.note) : '') + '</textarea>' +
+        '</div>' +
+        '<div class="zt-modal-actions">' +
+          '<button class="zt-btn zt-btn-ghost" id="zt-modal-cancel">Cancel</button>' +
+          (editingId ? '<button class="zt-btn zt-btn-ghost" id="zt-modal-delete" style="color:#FF9C8C;">Delete</button>' : '') +
+          '<button class="zt-btn zt-btn-primary" id="zt-modal-save">Save reading</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    var currentMeter = meterId;
+    overlay.querySelectorAll('#zt-meter-pick button').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        currentMeter = btn.getAttribute('data-meter');
+        overlay.querySelectorAll('#zt-meter-pick button').forEach(function(b){ b.classList.remove('active'); });
+        btn.classList.add('active');
+        checkWarn();
+      });
+    });
+
+    var photoInput = overlay.querySelector('#zt-photo-input');
+    overlay.querySelector('#zt-photo-drop').addEventListener('click', function(){ photoInput.click(); });
+    photoInput.addEventListener('change', function(e){
+      var file = e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(ev){
+        pendingPhotoDataUrl = ev.target.result;
+        renderPhotoPreview(overlay);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    function renderPhotoPreview(ov){
+      var area = ov.querySelector('#zt-photo-area');
+      area.innerHTML =
+        '<div class="zt-photo-preview">' +
+          '<img src="' + pendingPhotoDataUrl + '" id="zt-photo-img">' +
+          '<button type="button" class="zt-btn zt-btn-icon zt-btn-sm remove-photo" id="zt-photo-remove">✕</button>' +
+        '</div>';
+      area.querySelector('#zt-photo-img').addEventListener('click', function(){ openLightbox(pendingPhotoDataUrl); });
+      area.querySelector('#zt-photo-remove').addEventListener('click', function(){
+        pendingPhotoDataUrl = null;
+        area.innerHTML = '<div class="zt-photo-drop" id="zt-photo-drop">📷 Tap to take or choose a photo</div>';
+        area.querySelector('#zt-photo-drop').addEventListener('click', function(){ photoInput.click(); });
+      });
+    }
+
+    var valueInput = overlay.querySelector('#zt-value-input');
+    function checkWarn(){
+      var warnBox = overlay.querySelector('#zt-modal-warn');
+      warnBox.innerHTML = '';
+      var last = lastReading(currentMeter);
+      var v = parseFloat(valueInput.value);
+      if (last && !isNaN(v) && v < last.value && (!editingId || last.id !== editingId)){
+        warnBox.innerHTML = '<div class="zt-warn-box">This is lower than the last reading (' + last.value.toLocaleString('de-DE',{minimumFractionDigits:1}) + ' kWh on ' + fmtLong(parseDate(last.date)) + '). That\'s fine if the meter was replaced or this corrects an earlier entry — otherwise double-check the number.</div>';
+      }
+    }
+    valueInput.addEventListener('input', checkWarn);
+
+    overlay.querySelector('#zt-modal-cancel').addEventListener('click', closeModal);
+    overlay.addEventListener('click', function(e){ if (e.target===overlay) closeModal(); });
+    function closeModal(){ overlay.remove(); }
+
+    if (editingId){
+      overlay.querySelector('#zt-modal-delete').addEventListener('click', function(){
+        closeModal();
+        deleteReading(currentMeter, editingId);
+      });
+    }
+
+    overlay.querySelector('#zt-modal-save').addEventListener('click', function(){
+      var v = parseFloat(valueInput.value);
+      var d = overlay.querySelector('#zt-date-input').value;
+      var note = overlay.querySelector('#zt-note-input').value.trim();
+      if (isNaN(v)){ toast('Enter a reading value.'); return; }
+      if (!d){ toast('Pick a date.'); return; }
+      if (editingId){
+        var arr = DATA.readings[currentMeter];
+        var rec = arr.find(function(r){ return r.id===editingId; });
+        if (rec){ rec.value = v; rec.date = d; rec.note = note; }
+      } else {
+        DATA.readings[currentMeter].push({ id: uid(), value:v, date:d, note:note });
+      }
+      saveData().then(function(){
+        closeModal();
+        activeHistoryMeter = currentMeter;
+        renderAll();
+        toast('Reading saved.');
+      });
+    });
+
+    if (existing) checkWarn();
+  }
+
+  function openLightbox(src){
+    var lb = document.createElement('div');
+    lb.className = 'zt-lightbox';
+    lb.innerHTML = '<img src="' + src + '"><button class="zt-btn zt-btn-icon lightbox-close zt-lightbox-close">✕</button>';
+    lb.addEventListener('click', function(e){ if (e.target===lb || e.target.classList.contains('zt-lightbox-close')) lb.remove(); });
+    document.body.appendChild(lb);
+  }
+
+  // ---------- settings modal ----------
+  function openSettingsModal(){
+    var overlay = document.createElement('div');
+    overlay.className = 'zt-overlay';
+    var fields = METER_ORDER.map(function(id){
+      return '<div class="zt-field"><label>' + (DATA.meters[id].kind==='generation' ? 'Solar meter name' : id.toUpperCase() + ' name') + '</label>' +
+        '<input type="text" data-meter-name="' + id + '" value="' + escapeHtml(DATA.meters[id].name) + '"></div>';
+    }).join('');
+    overlay.innerHTML =
+      '<div class="zt-modal">' +
+        '<h3>Rename flats</h3>' +
+        '<p class="zt-modal-sub">These names are just labels — your readings stay attached to the same meter.</p>' +
+        fields +
+        '<div class="zt-modal-actions">' +
+          '<button class="zt-btn zt-btn-ghost" id="zt-settings-cancel">Cancel</button>' +
+          '<button class="zt-btn zt-btn-primary" id="zt-settings-save">Save</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function(e){ if (e.target===overlay) overlay.remove(); });
+    overlay.querySelector('#zt-settings-cancel').addEventListener('click', function(){ overlay.remove(); });
+    overlay.querySelector('#zt-settings-save').addEventListener('click', function(){
+      overlay.querySelectorAll('[data-meter-name]').forEach(function(inp){
+        var id = inp.getAttribute('data-meter-name');
+        var v = inp.value.trim();
+        if (v) DATA.meters[id].name = v;
+      });
+      saveData().then(function(){ overlay.remove(); renderAll(); toast('Names updated.'); });
+    });
+  }
+
+  // ---------- CSV export ----------
+  function exportCSV(){
+    var rows = [['meter','date','value_kwh','note']];
+    METER_ORDER.forEach(function(id){
+      (DATA.readings[id]||[]).slice().sort(function(a,b){return parseDate(a.date)-parseDate(b.date);}).forEach(function(r){
+        rows.push([DATA.meters[id].name, r.date, r.value, (r.note||'').replace(/[\r\n,]/g,' ')]);
+      });
+    });
+    var csv = rows.map(function(row){
+      return row.map(function(cell){
+        var s = String(cell);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+      }).join(',');
+    }).join('\n');
+    var blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'stromverbrauch-' + todayStr() + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // ---------- init ----------
+  function renderAll(){
+    renderMeterCards();
+    renderControls();
+    renderCharts();
+    renderHistoryTabs();
+    renderHistoryTable();
+  }
+
+  document.getElementById('zt-btn-add-global').addEventListener('click', function(){ openReadingModal('flat1'); });
+  document.getElementById('zt-btn-settings').addEventListener('click', openSettingsModal);
+  document.getElementById('zt-btn-export').addEventListener('click', exportCSV);
+
+  function normalize(d){
+    var def = defaultData();
+    METER_ORDER.forEach(function(id){
+      if (!d.meters[id]) d.meters[id] = def.meters[id];
+      if (!d.readings[id]) d.readings[id] = [];
+    });
+    return d;
+  }
+
+  function startListening(){
+    unsubscribeSnapshot = onSnapshot(docRef, function(snap){
+      if (snap.exists()){
+        DATA = normalize(snap.data());
+      } else {
+        DATA = defaultData();
+        setDoc(docRef, DATA);
+      }
+      renderAll();
+    }, function(err){
+      console.error('firestore snapshot error', err);
+      toast('Could not load data — check the account and Firestore rules.');
+    });
+  }
+
+  var provider = new GoogleAuthProvider();
+  document.getElementById('zt-signin-btn').addEventListener('click', function(){
+    document.getElementById('zt-auth-err').style.display = 'none';
+    signInWithPopup(auth, provider).catch(function(e){
+      console.error('sign-in failed', e);
+      toast('Sign-in failed. Try again.');
+    });
+  });
+
+  onAuthStateChanged(auth, function(user){
+    var gate = document.getElementById('zt-auth-gate');
+    var root = document.getElementById('zt-root');
+    if (unsubscribeSnapshot){ unsubscribeSnapshot(); unsubscribeSnapshot = null; }
+    if (user && user.email === ALLOWED_EMAIL){
+      gate.style.display = 'none';
+      root.style.display = '';
+      document.getElementById('zt-userbar').innerHTML =
+        escapeHtml(user.email) + ' · <button id="zt-signout-btn">Sign out</button>';
+      document.getElementById('zt-signout-btn').addEventListener('click', function(){ signOut(auth); });
+      startListening();
+    } else if (user){
+      // signed in, but not the authorized account
+      signOut(auth);
+      gate.style.display = 'flex';
+      root.style.display = 'none';
+      document.getElementById('zt-auth-err').style.display = 'block';
+    } else {
+      gate.style.display = 'flex';
+      root.style.display = 'none';
+    }
+  });
+</script>
+</body>
+</html>
