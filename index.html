@@ -200,9 +200,11 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
         <span class="zt-userbar" id="zt-userbar"></span>
         <button class="zt-btn zt-btn-ghost" id="zt-btn-export">Export CSV</button>
         <button class="zt-btn zt-btn-ghost" id="zt-btn-settings">Rename flats</button>
+        <button class="zt-btn zt-btn-ghost" id="zt-btn-import">Import photos</button>
         <button class="zt-btn zt-btn-primary" id="zt-btn-add-global">+ Add reading</button>
       </div>
     </div>
+    <input type="file" accept="image/*" multiple id="zt-batch-file-input" style="display:none;">
 
     <div class="zt-meter-grid" id="zt-meter-grid"></div>
 
@@ -689,7 +691,7 @@ let unsubscribeSnapshot = null;
           '<div id="zt-photo-area">' +
             '<div class="zt-photo-drop" id="zt-photo-drop">📷 Tap to take or choose a photo</div>' +
           '</div>' +
-          '<input type="file" accept="image/*" capture="environment" id="zt-photo-input" style="display:none;">' +
+          '<input type="file" accept="image/*" id="zt-photo-input" style="display:none;">' +
         '</div>' +
         '<div class="zt-field">' +
           '<label>Reading (kWh)</label>' +
@@ -804,6 +806,139 @@ let unsubscribeSnapshot = null;
     document.body.appendChild(lb);
   }
 
+  // ---------- EXIF date reading (JPEG only; falls back to file mtime) ----------
+  function readExifDate(file){
+    return new Promise(function(resolve){
+      if (!file.type || file.type !== 'image/jpeg'){ resolve(null); return; }
+      var reader = new FileReader();
+      reader.onload = function(e){
+        try {
+          var view = new DataView(e.target.result);
+          if (view.getUint16(0, false) !== 0xFFD8){ resolve(null); return; }
+          var offset = 2;
+          var length = view.byteLength;
+          while (offset + 4 <= length){
+            var marker = view.getUint16(offset, false);
+            offset += 2;
+            if (marker === 0xFFE1){
+              offset += 2; // segment length, unused
+              if (view.getUint32(offset, false) !== 0x45786966){ resolve(null); return; } // "Exif"
+              var tiffOffset = offset + 6;
+              var little = view.getUint16(tiffOffset, false) === 0x4949;
+              var firstIFDOffset = view.getUint32(tiffOffset + 4, little);
+              var dirOffset = tiffOffset + firstIFDOffset;
+              var entries = view.getUint16(dirOffset, little);
+              for (var i=0; i<entries; i++){
+                var entryOffset = dirOffset + 2 + i*12;
+                var tag = view.getUint16(entryOffset, little);
+                if (tag === 0x9003 || tag === 0x0132){
+                  var valueOffset = view.getUint32(entryOffset + 8, little) + tiffOffset;
+                  var str = '';
+                  for (var j=0;j<19;j++){ str += String.fromCharCode(view.getUint8(valueOffset+j)); }
+                  var m = str.match(/^(\d{4}):(\d{2}):(\d{2})/);
+                  if (m){ resolve(m[1] + '-' + m[2] + '-' + m[3]); return; }
+                }
+              }
+              resolve(null); return;
+            } else if ((marker & 0xFF00) !== 0xFF00){
+              break;
+            } else {
+              offset += view.getUint16(offset, false);
+            }
+          }
+          resolve(null);
+        } catch(err){ resolve(null); }
+      };
+      reader.onerror = function(){ resolve(null); };
+      reader.readAsArrayBuffer(file.slice(0, 131072));
+    });
+  }
+
+  // ---------- batch photo import ----------
+  function openBatchImport(fileList){
+    var queue = Array.prototype.slice.call(fileList);
+    if (!queue.length) return;
+    var batchMeter = null;
+    var overlay = document.createElement('div');
+    overlay.className = 'zt-overlay';
+    document.body.appendChild(overlay);
+
+    renderMeterStep();
+
+    function renderMeterStep(){
+      var meterButtons = METER_ORDER.map(function(id){
+        return '<button type="button" data-meter="' + id + '">' + escapeHtml(DATA.meters[id].name) + '</button>';
+      }).join('');
+      overlay.innerHTML =
+        '<div class="zt-modal">' +
+          '<h3>Import ' + queue.length + ' photo' + (queue.length>1?'s':'') + '</h3>' +
+          '<p class="zt-modal-sub">Which meter are all of these photos of? You\'ll confirm the date and reading for each one next.</p>' +
+          '<div class="zt-meter-pick">' + meterButtons + '</div>' +
+          '<div class="zt-modal-actions"><button class="zt-btn zt-btn-ghost" id="zt-batch-cancel">Cancel</button></div>' +
+        '</div>';
+      overlay.querySelectorAll('.zt-meter-pick button').forEach(function(btn){
+        btn.addEventListener('click', function(){ batchMeter = btn.getAttribute('data-meter'); showPhoto(0); });
+      });
+      overlay.querySelector('#zt-batch-cancel').addEventListener('click', function(){ overlay.remove(); });
+    }
+
+    function showPhoto(i){
+      if (i >= queue.length){
+        overlay.remove();
+        activeHistoryMeter = batchMeter;
+        renderAll();
+        toast('Import finished.');
+        return;
+      }
+      var file = queue[i];
+      var objectUrl = URL.createObjectURL(file);
+      overlay.innerHTML =
+        '<div class="zt-modal">' +
+          '<h3>Photo ' + (i+1) + ' of ' + queue.length + '</h3>' +
+          '<p class="zt-modal-sub">' + escapeHtml(DATA.meters[batchMeter].name) + '</p>' +
+          '<div class="zt-photo-preview"><img src="' + objectUrl + '" id="zt-batch-img"></div>' +
+          '<div class="zt-field"><label>Reading (kWh)</label><input type="number" step="0.1" id="zt-batch-value" placeholder="e.g. 4821.6"></div>' +
+          '<div class="zt-field"><label>Date</label><input type="date" id="zt-batch-date" max="' + todayStr() + '"></div>' +
+          '<div class="zt-hint" id="zt-batch-date-hint">Reading photo metadata…</div>' +
+          '<div class="zt-modal-actions">' +
+            '<button class="zt-btn zt-btn-ghost" id="zt-batch-skip">Skip</button>' +
+            '<button class="zt-btn zt-btn-primary" id="zt-batch-save">Save &amp; next</button>' +
+          '</div>' +
+        '</div>';
+
+      overlay.querySelector('#zt-batch-img').addEventListener('click', function(){ openLightbox(objectUrl); });
+
+      var dateInput = overlay.querySelector('#zt-batch-date');
+      var hint = overlay.querySelector('#zt-batch-date-hint');
+      readExifDate(file).then(function(exifDate){
+        if (exifDate){
+          dateInput.value = exifDate;
+          hint.textContent = 'Date read from the photo\u2019s metadata \u2014 double-check it, then adjust if needed.';
+        } else {
+          var fallback = new Date(file.lastModified);
+          dateInput.value = fallback.getFullYear() + '-' + String(fallback.getMonth()+1).padStart(2,'0') + '-' + String(fallback.getDate()).padStart(2,'0');
+          hint.textContent = 'No photo metadata found \u2014 using the file\u2019s last-modified date instead. Please check it.';
+        }
+      });
+
+      overlay.querySelector('#zt-batch-skip').addEventListener('click', function(){
+        URL.revokeObjectURL(objectUrl);
+        showPhoto(i+1);
+      });
+      overlay.querySelector('#zt-batch-save').addEventListener('click', function(){
+        var v = parseFloat(overlay.querySelector('#zt-batch-value').value);
+        var d = dateInput.value;
+        if (isNaN(v)){ toast('Enter a reading value.'); return; }
+        if (!d){ toast('Pick a date.'); return; }
+        DATA.readings[batchMeter].push({ id: uid(), value:v, date:d, note:'' });
+        saveData().then(function(){
+          URL.revokeObjectURL(objectUrl);
+          showPhoto(i+1);
+        });
+      });
+    }
+  }
+
   // ---------- settings modal ----------
   function openSettingsModal(){
     var overlay = document.createElement('div');
@@ -869,6 +1004,11 @@ let unsubscribeSnapshot = null;
   document.getElementById('zt-btn-add-global').addEventListener('click', function(){ openReadingModal('flat1'); });
   document.getElementById('zt-btn-settings').addEventListener('click', openSettingsModal);
   document.getElementById('zt-btn-export').addEventListener('click', exportCSV);
+  document.getElementById('zt-btn-import').addEventListener('click', function(){ document.getElementById('zt-batch-file-input').click(); });
+  document.getElementById('zt-batch-file-input').addEventListener('change', function(e){
+    if (e.target.files && e.target.files.length) openBatchImport(e.target.files);
+    e.target.value = '';
+  });
 
   function normalize(d){
     var def = defaultData();
