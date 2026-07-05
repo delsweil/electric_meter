@@ -246,6 +246,7 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
         <div class="zt-empty-note" id="zt-solar-empty" style="display:none;">Add readings for Flat 3's consumption and its feed-in meter to compare them here.</div>
       </div>
 
+      <div class="zt-empty-note" id="zt-solar-stats-range" style="margin-top:10px;"></div>
       <div class="zt-stat-grid" id="zt-solar-stats"></div>
 
       <div class="zt-chart-card" style="margin-top:12px;">
@@ -607,19 +608,43 @@ let unsubscribeSnapshot = null;
       options: chartOptions(buckets, ' kWh')
     });
 
-    renderSolarStats(cons, exported, generated);
+    renderSolarStats(buckets, cons, exported, generated);
     renderEfficiencyChart(buckets, cons, exported, generated);
   }
 
-  function renderSolarStats(cons, exported, generated){
+  function renderSolarStats(buckets, cons, exported, generated){
     var wrap = document.getElementById('zt-solar-stats');
+    var rangeWrap = document.getElementById('zt-solar-stats-range');
     var totalGen = 0, totalCons = 0, totalSelfConsumed = 0, anyCovered = false;
     for (var i=0; i<cons.length; i++){
       var c = cons[i].value, e = exported[i].value, g = generated[i].value;
       if (c !== null) totalCons += c;
       if (g !== null) totalGen += g;
-      if (g !== null && e !== null){ totalSelfConsumed += Math.max(0, g - e); anyCovered = true; }
+      // Only count self-consumption for a period where we actually have all
+      // three figures — otherwise a week with solar data but no consumption
+      // reading yet would get counted as "self-consumed" with nothing to
+      // measure it against, which can push totals past what's physically
+      // possible (self-sufficiency over 100%, etc).
+      if (c !== null && g !== null && e !== null){
+        var selfConsumed = Math.max(0, g - e);
+        // Cap at that period's actual consumption — self-consumed can never
+        // exceed what was actually used, even if reading-date misalignment
+        // between the three separate meters makes the raw subtraction
+        // slightly overshoot.
+        totalSelfConsumed += Math.min(selfConsumed, c);
+        anyCovered = true;
+      }
     }
+
+    if (buckets.length){
+      var rangeStart = buckets[0].start;
+      var rangeEnd = addDays(buckets[buckets.length-1].end, -1);
+      rangeWrap.textContent = 'Showing ' + fmtShort(rangeStart) + ' \u2013 ' + fmtShort(rangeEnd) + ' (' + buckets[0].label + '\u2013' + buckets[buckets.length-1].label + ') \u2014 change the Day/Week/Month and range controls above to adjust.';
+      rangeWrap.style.display = 'block';
+    } else {
+      rangeWrap.style.display = 'none';
+    }
+
     if (!anyCovered || totalGen === 0){
       wrap.innerHTML = '';
       return;
@@ -629,7 +654,7 @@ let unsubscribeSnapshot = null;
     var price = DATA.settings.pricePerKwh;
 
     var cards = [
-      { label: 'Generated', value: totalGen.toFixed(1), unit: 'kWh', sub: 'over the selected range' },
+      { label: 'Generated', value: totalGen.toFixed(1), unit: 'kWh', sub: 'over the range shown below' },
       { label: 'Self-consumed', value: totalSelfConsumed.toFixed(1), unit: 'kWh', sub: 'generated \u2212 fed into network' },
       { label: 'Self-consumption rate', value: selfConsumptionRate!=null ? selfConsumptionRate.toFixed(0) : '—', unit: '%', sub: 'of generation actually used' },
       { label: 'Self-sufficiency', value: selfSufficiencyRate!=null ? selfSufficiencyRate.toFixed(0) : '—', unit: '%', sub: 'of Flat 3\u2019s usage from solar' }
