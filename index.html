@@ -220,7 +220,7 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
       <div class="zt-section-head">
         <div>
           <h2>Usage by period</h2>
-          <div class="zt-section-sub">Consumption between photos is spread evenly across the days in between, then summed per period.</div>
+          <div class="zt-section-sub">Consumption between photos is spread evenly across the days in between, then summed per period. Faded bars mean fewer actual readings back that period \u2014 hover for details.</div>
         </div>
         <div class="zt-controls">
           <div class="zt-segmented" id="zt-granularity"></div>
@@ -417,6 +417,24 @@ let unsubscribeSnapshot = null;
   function fmtShort(d){ return d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'}); }
   function fmtLong(d){ return d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}); }
 
+  // ---------- confidence-faded bar colors ----------
+  // Periods backed by 2+ actual photographed readings render at full
+  // opacity; periods with only 0-1 (i.e. the value is mostly or entirely
+  // an interpolated guess across a longer gap) render faded, so you can
+  // see at a glance which parts of a chart are real observed variation
+  // vs. a smoothed-over gap between infrequent readings.
+  function hexToRgba(hex, alpha){
+    var h = hex.replace('#','');
+    var r = parseInt(h.substring(0,2),16), g = parseInt(h.substring(2,4),16), b = parseInt(h.substring(4,6),16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+  }
+  function confidenceColors(hex, series){
+    return series.map(function(s){
+      if (s.value === null) return hexToRgba(hex, 0.25);
+      return hexToRgba(hex, s.count >= 2 ? 1 : (s.count === 1 ? 0.7 : 0.35));
+    });
+  }
+
   function getBuckets(gran, minDate, maxDate, maxCount){
     var cur, buckets = [];
     if (gran==='day') cur = new Date(minDate.getFullYear(),minDate.getMonth(),minDate.getDate());
@@ -443,7 +461,7 @@ let unsubscribeSnapshot = null;
   // ---------- prorated usage ----------
   function prorate(readings, buckets){
     var sorted = readings.slice().sort(function(a,b){ return parseDate(a.date)-parseDate(b.date); });
-    var out = buckets.map(function(b){ return { start:b.start, end:b.end, label:b.label, rangeLabel:b.rangeLabel, value:0, covered:false }; });
+    var out = buckets.map(function(b){ return { start:b.start, end:b.end, label:b.label, rangeLabel:b.rangeLabel, value:0, covered:false, count:0 }; });
     for (var i=0;i<sorted.length-1;i++){
       var r1 = sorted[i], r2 = sorted[i+1];
       var t1 = parseDate(r1.date).getTime(), t2 = parseDate(r2.date).getTime();
@@ -461,6 +479,15 @@ let unsubscribeSnapshot = null;
         }
       }
     }
+    // Count actual (not interpolated) readings that fall inside each bucket —
+    // this is the confidence signal: a period with 2+ real photos in it is
+    // trustworthy, one with 0-1 is mostly/entirely an interpolated guess.
+    sorted.forEach(function(r){
+      var t = parseDate(r.date).getTime();
+      for (var j=0;j<out.length;j++){
+        if (t >= out[j].start.getTime() && t < out[j].end.getTime()) out[j].count++;
+      }
+    });
     out.forEach(function(b){ if (!b.covered) b.value = null; else b.value = Math.round(b.value*10)/10; });
     return out;
   }
@@ -579,7 +606,8 @@ let unsubscribeSnapshot = null;
       return {
         label: DATA.meters[m].name,
         data: series.map(function(s){ return s.value; }),
-        backgroundColor: METER_COLORS[m],
+        backgroundColor: confidenceColors(METER_COLORS[m], series),
+        readingCounts: series.map(function(s){ return s.count; }),
         borderRadius: 4,
         maxBarThickness: 26
       };
@@ -612,8 +640,8 @@ let unsubscribeSnapshot = null;
       data: {
         labels: buckets.map(function(b){return b.label;}),
         datasets: [
-          { label: solarMeterName + ' consumption', data: cons.map(function(s){return s.value;}), backgroundColor: METER_COLORS[SOLAR_CONSUMPTION_METER], borderRadius:4, maxBarThickness:26 },
-          { label: 'Solar fed into network', data: exported.map(function(s){return s.value;}), backgroundColor: METER_COLORS.flat3solar, borderRadius:4, maxBarThickness:26 }
+          { label: solarMeterName + ' consumption', data: cons.map(function(s){return s.value;}), backgroundColor: confidenceColors(METER_COLORS[SOLAR_CONSUMPTION_METER], cons), readingCounts: cons.map(function(s){return s.count;}), borderRadius:4, maxBarThickness:26 },
+          { label: 'Solar fed into network', data: exported.map(function(s){return s.value;}), backgroundColor: confidenceColors(METER_COLORS.flat3solar, exported), readingCounts: exported.map(function(s){return s.count;}), borderRadius:4, maxBarThickness:26 }
         ]
       },
       options: chartOptions(buckets, ' kWh')
@@ -713,8 +741,8 @@ let unsubscribeSnapshot = null;
       data: {
         labels: buckets.map(function(b){return b.label;}),
         datasets: [
-          { type:'bar', label:'Solar-covered', data: solarCovered, backgroundColor: METER_COLORS.flat3gen, stack:'cons', borderRadius:4, maxBarThickness:26 },
-          { type:'bar', label:'Grid-drawn', data: gridDrawn, backgroundColor: METER_COLORS[SOLAR_CONSUMPTION_METER], stack:'cons', borderRadius:4, maxBarThickness:26 },
+          { type:'bar', label:'Solar-covered', data: solarCovered, backgroundColor: confidenceColors(METER_COLORS.flat3gen, cons), readingCounts: cons.map(function(s){return s.count;}), stack:'cons', borderRadius:4, maxBarThickness:26 },
+          { type:'bar', label:'Grid-drawn', data: gridDrawn, backgroundColor: confidenceColors(METER_COLORS[SOLAR_CONSUMPTION_METER], cons), readingCounts: cons.map(function(s){return s.count;}), stack:'cons', borderRadius:4, maxBarThickness:26 },
           { type:'line', label:'Total generated', data: genValues, borderColor:'#B7EE8A', borderDash:[5,3], borderWidth:2, pointRadius:3, tension:0, fill:false, yAxisID:'y' },
           { type:'line', label:'Self-sufficiency %', data: sufficiencyPct, borderColor:'#8FE9E0', borderWidth:2, pointRadius:3, tension:0.2, fill:false, yAxisID:'y1' }
         ]
@@ -732,8 +760,16 @@ let unsubscribeSnapshot = null;
               label: function(item){
                 var v = item.raw;
                 if (v===null || v===undefined) return item.dataset.label + ': no data';
-                if (item.dataset.label === 'Self-sufficiency %') return item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' %';
-                return item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' kWh';
+                var unit = item.dataset.label === 'Self-sufficiency %' ? ' %' : ' kWh';
+                var line = item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + unit;
+                var counts = item.dataset.readingCounts;
+                if (counts){
+                  var n = counts[item.dataIndex];
+                  if (n === 0) line += ' (no readings this period \u2014 interpolated)';
+                  else if (n === 1) line += ' (1 reading this period)';
+                  else if (n >= 2) line += ' (' + n + ' readings this period)';
+                }
+                return line;
               }
             }
           }
@@ -761,7 +797,15 @@ let unsubscribeSnapshot = null;
             label: function(item){
               var v = item.raw;
               if (v===null || v===undefined) return item.dataset.label + ': no data';
-              return item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + (unitSuffix||'');
+              var line = item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + (unitSuffix||'');
+              var counts = item.dataset.readingCounts;
+              if (counts){
+                var n = counts[item.dataIndex];
+                if (n === 0) line += ' (no readings this period \u2014 interpolated)';
+                else if (n === 1) line += ' (1 reading this period)';
+                else if (n >= 2) line += ' (' + n + ' readings this period)';
+              }
+              return line;
             }
           }
         }
