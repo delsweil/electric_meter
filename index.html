@@ -237,22 +237,22 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
     <div class="zt-section" id="zt-solar-section">
       <div class="zt-section-head">
         <div>
-          <h2>Balcony solar — Flat 3</h2>
-          <div class="zt-section-sub">Two separate meters: how much the panels generated in total, and how much of that was fed back into the network. The difference is what Flat 3 used directly.</div>
+          <h2 id="zt-solar-heading">Balcony solar</h2>
+          <div class="zt-section-sub" id="zt-solar-subhead">Two separate meters: how much the panels generated in total, and how much of that was fed back into the network.</div>
         </div>
       </div>
       <div class="zt-chart-card">
         <div class="zt-chart-wrap"><canvas id="zt-chart-solar"></canvas></div>
-        <div class="zt-empty-note" id="zt-solar-empty" style="display:none;">Add readings for Flat 3's consumption and its feed-in meter to compare them here.</div>
+        <div class="zt-empty-note" id="zt-solar-empty" style="display:none;"></div>
       </div>
 
       <div class="zt-empty-note" id="zt-solar-stats-range" style="margin-top:10px;"></div>
       <div class="zt-stat-grid" id="zt-solar-stats"></div>
 
       <div class="zt-chart-card" style="margin-top:12px;">
-        <div class="zt-section-sub" style="margin-bottom:10px;">Self-consumption = generated \u2212 fed into network, using the two solar meters directly (not estimated). Shown as how much of Flat 3's consumption solar covered vs. drew from the grid, with total generation overlaid.</div>
+        <div class="zt-section-sub" style="margin-bottom:10px;" id="zt-efficiency-subhead">Self-consumption = generated − fed into network, using the two solar meters directly (not estimated).</div>
         <div class="zt-chart-wrap"><canvas id="zt-chart-efficiency"></canvas></div>
-        <div class="zt-empty-note" id="zt-efficiency-empty" style="display:none;">Once Flat 3's consumption, feed-in meter, and total generation all have readings for overlapping periods, self-consumption will appear here.</div>
+        <div class="zt-empty-note" id="zt-efficiency-empty" style="display:none;"></div>
       </div>
     </div>
 
@@ -328,6 +328,10 @@ let unsubscribeSnapshot = null;
 
   var METER_ORDER = ['flat1','flat2','flat3','flat3solar','flat3gen'];
   var METER_COLORS = { flat1:'#FFB020', flat2:'#FF7A45', flat3:'#E8543E', flat3solar:'#4FD1C5', flat3gen:'#8BD450' };
+  // The balcony solar setup is physically attached to this flat's consumption
+  // meter — self-consumption is calculated against whichever meter this
+  // points to. (Previously wrongly assumed to be flat3 — it's actually flat1.)
+  var SOLAR_CONSUMPTION_METER = 'flat1';
 
   function defaultData(){
     return {
@@ -335,8 +339,8 @@ let unsubscribeSnapshot = null;
         flat1: { name:'Flat 1', kind:'consumption' },
         flat2: { name:'Flat 2', kind:'consumption' },
         flat3: { name:'Flat 3', kind:'consumption' },
-        flat3solar: { name:'Flat 3 · Solar fed into network', kind:'generation' },
-        flat3gen: { name:'Flat 3 · Solar generated (total)', kind:'generation' }
+        flat3solar: { name:'Solar fed into network', kind:'generation' },
+        flat3gen: { name:'Solar generated (total)', kind:'generation' }
       },
       readings: { flat1:[], flat2:[], flat3:[], flat3solar:[], flat3gen:[] },
       settings: { pricePerKwh: null }
@@ -589,10 +593,17 @@ let unsubscribeSnapshot = null;
   }
 
   function renderSolarChart(buckets){
+    var solarMeterName = DATA.meters[SOLAR_CONSUMPTION_METER].name;
+    document.getElementById('zt-solar-heading').textContent = 'Balcony solar — ' + solarMeterName;
+    document.getElementById('zt-solar-subhead').textContent = 'Two separate meters: how much the panels generated in total, and how much of that was fed back into the network. The difference is what ' + solarMeterName + ' used directly.';
+    document.getElementById('zt-solar-empty').textContent = 'Add readings for ' + solarMeterName + '\u2019s consumption and its feed-in meter to compare them here.';
+    document.getElementById('zt-efficiency-subhead').textContent = 'Self-consumption = generated \u2212 fed into network, using the two solar meters directly (not estimated). Shown as how much of ' + solarMeterName + '\u2019s consumption solar covered vs. drew from the grid, with total generation overlaid.';
+    document.getElementById('zt-efficiency-empty').textContent = 'Once ' + solarMeterName + '\u2019s consumption, feed-in meter, and total generation all have readings for overlapping periods, self-consumption will appear here.';
+
     var ctx = document.getElementById('zt-chart-solar');
-    var hasAny = (DATA.readings.flat3||[]).length>=2 || (DATA.readings.flat3solar||[]).length>=2;
+    var hasAny = (DATA.readings[SOLAR_CONSUMPTION_METER]||[]).length>=2 || (DATA.readings.flat3solar||[]).length>=2;
     document.getElementById('zt-solar-empty').style.display = hasAny ? 'none' : 'block';
-    var cons = prorate(DATA.readings.flat3||[], buckets);
+    var cons = prorate(DATA.readings[SOLAR_CONSUMPTION_METER]||[], buckets);
     var exported = prorate(DATA.readings.flat3solar||[], buckets);
     var generated = prorate(DATA.readings.flat3gen||[], buckets);
     if (chartSolar) chartSolar.destroy();
@@ -601,7 +612,7 @@ let unsubscribeSnapshot = null;
       data: {
         labels: buckets.map(function(b){return b.label;}),
         datasets: [
-          { label: 'Flat 3 consumption', data: cons.map(function(s){return s.value;}), backgroundColor: METER_COLORS.flat3, borderRadius:4, maxBarThickness:26 },
+          { label: solarMeterName + ' consumption', data: cons.map(function(s){return s.value;}), backgroundColor: METER_COLORS[SOLAR_CONSUMPTION_METER], borderRadius:4, maxBarThickness:26 },
           { label: 'Solar fed into network', data: exported.map(function(s){return s.value;}), backgroundColor: METER_COLORS.flat3solar, borderRadius:4, maxBarThickness:26 }
         ]
       },
@@ -643,7 +654,7 @@ let unsubscribeSnapshot = null;
       var rangeEnd = addDays(buckets[buckets.length-1].end, -1);
       var rangeText = 'Showing ' + fmtShort(rangeStart) + ' \u2013 ' + fmtShort(rangeEnd) + ' (' + buckets[0].label + '\u2013' + buckets[buckets.length-1].label + ') \u2014 change the Day/Week/Month and range controls above to adjust.';
       if (anyCovered && coveredPeriods < buckets.length){
-        rangeText += ' Self-consumption figures below are based on just ' + coveredPeriods + ' of these ' + buckets.length + ' periods, where Flat 3\u2019s consumption, feed-in, and generation readings all overlap \u2014 add more Flat 3 readings to widen this.';
+        rangeText += ' Self-consumption figures below are based on just ' + coveredPeriods + ' of these ' + buckets.length + ' periods, where ' + DATA.meters[SOLAR_CONSUMPTION_METER].name + '\u2019s consumption, feed-in, and generation readings all overlap \u2014 add more ' + DATA.meters[SOLAR_CONSUMPTION_METER].name + ' readings to widen this.';
       }
       rangeWrap.textContent = rangeText;
       rangeWrap.style.display = 'block';
@@ -666,7 +677,7 @@ let unsubscribeSnapshot = null;
       { label: 'Generated', value: totalGen.toFixed(1), unit: 'kWh', sub: 'over the full range shown below' },
       { label: 'Self-consumed', value: totalSelfConsumed.toFixed(1), unit: 'kWh', sub: 'generated \u2212 fed into network, overlapping periods only' },
       { label: 'Self-consumption rate', value: selfConsumptionRate!=null ? selfConsumptionRate.toFixed(0) : '—', unit: '%', sub: 'of generation used, in overlapping periods' },
-      { label: 'Self-sufficiency', value: selfSufficiencyRate!=null ? selfSufficiencyRate.toFixed(0) : '—', unit: '%', sub: 'of Flat 3\u2019s usage from solar' }
+      { label: 'Self-sufficiency', value: selfSufficiencyRate!=null ? selfSufficiencyRate.toFixed(0) : '—', unit: '%', sub: 'of ' + DATA.meters[SOLAR_CONSUMPTION_METER].name + '\u2019s usage from solar' }
     ];
     if (price){
       cards.push({ label: 'Est. saved', value: (totalSelfConsumed*price).toFixed(2), unit: '\u20ac', sub: 'at \u20ac' + price + '/kWh' });
@@ -702,7 +713,7 @@ let unsubscribeSnapshot = null;
         labels: buckets.map(function(b){return b.label;}),
         datasets: [
           { type:'bar', label:'Solar-covered', data: solarCovered, backgroundColor: METER_COLORS.flat3gen, stack:'cons', borderRadius:4, maxBarThickness:26 },
-          { type:'bar', label:'Grid-drawn', data: gridDrawn, backgroundColor: METER_COLORS.flat3, stack:'cons', borderRadius:4, maxBarThickness:26 },
+          { type:'bar', label:'Grid-drawn', data: gridDrawn, backgroundColor: METER_COLORS[SOLAR_CONSUMPTION_METER], stack:'cons', borderRadius:4, maxBarThickness:26 },
           { type:'line', label:'Total generated', data: genValues, borderColor:'#B7EE8A', borderDash:[5,3], borderWidth:2, pointRadius:3, tension:0, fill:false }
         ]
       },
@@ -1358,6 +1369,22 @@ let unsubscribeSnapshot = null;
       }
     });
     d.readings.flat3solar = stillFeedIn;
+
+    // Second cleanup: manually-photographed readings (i.e. anything NOT
+    // tagged as Solarman-synced) that ended up in flat3gen are actually
+    // photos of the meter's feed-in register (2.8.0), not total generation —
+    // move them to flat3solar, where photographed readings actually belong.
+    var stillGenerated = [];
+    (d.readings.flat3gen || []).forEach(function(r){
+      if (!r.note || r.note.indexOf('Synced from Solarman') !== 0){
+        if (!d.readings.flat3solar.some(function(s){ return s.date === r.date; })){
+          d.readings.flat3solar.push(r);
+        }
+      } else {
+        stillGenerated.push(r);
+      }
+    });
+    d.readings.flat3gen = stillGenerated;
 
     return d;
   }
