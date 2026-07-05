@@ -694,15 +694,16 @@ let unsubscribeSnapshot = null;
     var hasAny = cons.some(function(s,i){ return s.value!==null && exported[i].value!==null && generated[i].value!==null; });
     document.getElementById('zt-efficiency-empty').style.display = hasAny ? 'none' : 'block';
 
-    var solarCovered = [], gridDrawn = [], genValues = [];
+    var solarCovered = [], gridDrawn = [], genValues = [], sufficiencyPct = [];
     for (var i=0; i<cons.length; i++){
       var c = cons[i].value, e = exported[i].value, g = generated[i].value;
       var selfConsumed = (g !== null && e !== null) ? Math.max(0, g - e) : null;
-      if (c === null){ solarCovered.push(null); gridDrawn.push(null); }
+      if (c === null){ solarCovered.push(null); gridDrawn.push(null); sufficiencyPct.push(null); }
       else {
         var covered = selfConsumed !== null ? Math.min(c, selfConsumed) : 0;
         solarCovered.push(Math.round(covered*10)/10);
         gridDrawn.push(Math.round((c-covered)*10)/10);
+        sufficiencyPct.push(selfConsumed !== null && c > 0 ? Math.round((covered/c)*1000)/10 : null);
       }
       genValues.push(g);
     }
@@ -714,7 +715,8 @@ let unsubscribeSnapshot = null;
         datasets: [
           { type:'bar', label:'Solar-covered', data: solarCovered, backgroundColor: METER_COLORS.flat3gen, stack:'cons', borderRadius:4, maxBarThickness:26 },
           { type:'bar', label:'Grid-drawn', data: gridDrawn, backgroundColor: METER_COLORS[SOLAR_CONSUMPTION_METER], stack:'cons', borderRadius:4, maxBarThickness:26 },
-          { type:'line', label:'Total generated', data: genValues, borderColor:'#B7EE8A', borderDash:[5,3], borderWidth:2, pointRadius:3, tension:0, fill:false }
+          { type:'line', label:'Total generated', data: genValues, borderColor:'#B7EE8A', borderDash:[5,3], borderWidth:2, pointRadius:3, tension:0, fill:false, yAxisID:'y' },
+          { type:'line', label:'Self-sufficiency %', data: sufficiencyPct, borderColor:'#8FE9E0', borderWidth:2, pointRadius:3, tension:0.2, fill:false, yAxisID:'y1' }
         ]
       },
       options: {
@@ -730,6 +732,7 @@ let unsubscribeSnapshot = null;
               label: function(item){
                 var v = item.raw;
                 if (v===null || v===undefined) return item.dataset.label + ': no data';
+                if (item.dataset.label === 'Self-sufficiency %') return item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' %';
                 return item.dataset.label + ': ' + v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' kWh';
               }
             }
@@ -737,7 +740,8 @@ let unsubscribeSnapshot = null;
         },
         scales:{
           x:{ stacked:true, ticks:{ color:'#5C6670', font:{ family:'IBM Plex Mono', size:10.5 } }, grid:{ color:'#242A2E' } },
-          y:{ stacked:true, beginAtZero:true, ticks:{ color:'#5C6670', font:{ family:'IBM Plex Mono', size:10.5 } }, grid:{ color:'#242A2E' } }
+          y:{ stacked:true, beginAtZero:true, ticks:{ color:'#5C6670', font:{ family:'IBM Plex Mono', size:10.5 } }, grid:{ color:'#242A2E' } },
+          y1:{ position:'right', beginAtZero:true, max:100, ticks:{ color:'#8FE9E0', font:{ family:'IBM Plex Mono', size:10.5 }, callback:function(v){ return v + '%'; } }, grid:{ display:false } }
         }
       }
     });
