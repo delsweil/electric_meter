@@ -463,11 +463,23 @@ let unsubscribeSnapshot = null;
       if (gran==='day') label = fmtShort(cur);
       else if (gran==='week') label = 'KW' + isoWeekNum(cur);
       else label = cur.toLocaleDateString('de-DE',{month:'short',year:'2-digit'});
-      buckets.push({ start:cur, end:next, label:label, rangeLabel: fmtShort(cur) + '–' + fmtShort(addDays(next,-1)) });
+      buckets.push({ start:cur, end:next, label:label, rangeLabel: fmtLong(cur) + '\u2013' + fmtLong(addDays(next,-1)) });
       cur = next;
       guard++;
     }
     if (maxCount && buckets.length > maxCount) buckets = buckets.slice(-maxCount);
+    // Day/week labels ("05.07", "KW21") don't carry a year and can repeat
+    // across years — only add one when the periods actually being shown
+    // span more than one calendar year, so a single-year view stays clean.
+    if (buckets.length && (gran==='day' || gran==='week')){
+      var years = buckets.map(function(b){ return b.start.getFullYear(); });
+      if (Math.min.apply(null,years) !== Math.max.apply(null,years)){
+        buckets.forEach(function(b){
+          var yy = String(b.start.getFullYear()).slice(-2);
+          b.label += (gran==='week' ? '\u2019' : '.') + yy;
+        });
+      }
+    }
     return buckets;
   }
 
@@ -693,7 +705,7 @@ let unsubscribeSnapshot = null;
     if (buckets.length){
       var rangeStart = buckets[0].start;
       var rangeEnd = addDays(buckets[buckets.length-1].end, -1);
-      var rangeText = 'Showing ' + fmtShort(rangeStart) + ' \u2013 ' + fmtShort(rangeEnd) + ' (' + buckets[0].label + '\u2013' + buckets[buckets.length-1].label + ') \u2014 change the Day/Week/Month and range controls above to adjust.';
+      var rangeText = 'Showing ' + fmtLong(rangeStart) + ' \u2013 ' + fmtLong(rangeEnd) + ' (' + buckets[0].label + '\u2013' + buckets[buckets.length-1].label + ') \u2014 change the Day/Week/Month and range controls above to adjust.';
       if (anyCovered && coveredPeriods < buckets.length){
         rangeText += ' Self-consumption figures below are based on just ' + coveredPeriods + ' of these ' + buckets.length + ' periods, where ' + DATA.meters[SOLAR_CONSUMPTION_METER].name + '\u2019s consumption, feed-in, and generation readings all overlap \u2014 add more ' + DATA.meters[SOLAR_CONSUMPTION_METER].name + ' readings to widen this.';
       }
@@ -714,14 +726,22 @@ let unsubscribeSnapshot = null;
     var selfSufficiencyRate = totalCons > 0 ? (totalSelfConsumed / totalCons * 100) : null;
     var price = DATA.settings.pricePerKwh;
 
+    // The gap between what was generated and what was actually verified as
+    // self-consumed — i.e. generation that went somewhere other than
+    // directly powering the flat (fed into the network, mostly).
+    var totalUnused = totalGenCovered - totalSelfConsumed;
+    var unusedRate = totalGenCovered > 0 ? (totalUnused / totalGenCovered * 100) : null;
+
     var cards = [
       { label: 'Generated', value: totalGen.toFixed(1), unit: 'kWh', sub: 'over the full range shown below' },
       { label: 'Self-consumed', value: totalSelfConsumed.toFixed(1), unit: 'kWh', sub: 'generated \u2212 fed into network, overlapping periods only' },
+      { label: 'Unused surplus', value: totalUnused.toFixed(1), unit: 'kWh', sub: unusedRate!=null ? unusedRate.toFixed(0) + '% of generation, overlapping periods' : 'generated but not self-consumed' },
       { label: 'Self-consumption rate', value: selfConsumptionRate!=null ? selfConsumptionRate.toFixed(0) : '—', unit: '%', sub: 'of generation used, in overlapping periods' },
       { label: 'Self-sufficiency', value: selfSufficiencyRate!=null ? selfSufficiencyRate.toFixed(0) : '—', unit: '%', sub: 'of ' + DATA.meters[SOLAR_CONSUMPTION_METER].name + '\u2019s usage from solar' }
     ];
     if (price){
       cards.push({ label: 'Est. saved', value: (totalSelfConsumed*price).toFixed(2), unit: '\u20ac', sub: 'at \u20ac' + price + '/kWh' });
+      cards.push({ label: 'Unrealized value', value: (totalUnused*price).toFixed(2), unit: '\u20ac', sub: 'what the unused surplus would be worth if self-consumed' });
     }
     wrap.innerHTML = cards.map(function(c){
       return '<div class="zt-stat-card"><div class="zt-stat-label">' + c.label + '</div>' +
@@ -862,7 +882,7 @@ let unsubscribeSnapshot = null;
           }
         },
         scales:{
-          x:{ type:'linear', ticks:{ color:'#5C6670', font:{family:'DM Sans',size:10.5}, callback:function(v){ return fmtShort(new Date(v)); } }, grid:{ color:'#242A2E' } },
+          x:{ type:'linear', ticks:{ color:'#5C6670', font:{family:'DM Sans',size:10.5}, callback:function(v){ return fmtLong(new Date(v)); } }, grid:{ color:'#242A2E' } },
           y:{ ticks:{ color:'#5C6670', font:{family:'DM Sans',size:10.5} }, grid:{ color:'#242A2E' } }
         }
       }
