@@ -261,7 +261,10 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
       <div class="zt-section-head">
         <div>
           <h2>Raw meter readings</h2>
-          <div class="zt-section-sub">The actual numbers you logged, cumulative — useful for sanity-checking the chart above.</div>
+          <div class="zt-section-sub" id="zt-raw-sub">The actual numbers you logged, cumulative — useful for sanity-checking the chart above.</div>
+        </div>
+        <div class="zt-controls">
+          <div class="zt-segmented" id="zt-raw-mode"></div>
         </div>
       </div>
       <div class="zt-chart-card">
@@ -352,6 +355,7 @@ let unsubscribeSnapshot = null;
   var granularity = 'week';
   var rangeCount = 10;
   var activeHistoryMeter = 'flat1';
+  var rawChartMode = 'cumulative';
   var chartCompare = null, chartSolar = null, chartRaw = null, chartEfficiency = null;
   var pendingPhotoDataUrl = null;
   var editingId = null;
@@ -597,6 +601,17 @@ let unsubscribeSnapshot = null;
       gWrap.appendChild(b);
     });
     syncRangeOptions();
+  }
+  function renderRawModeControl(){
+    var wrap = document.getElementById('zt-raw-mode');
+    wrap.innerHTML = '';
+    [['cumulative','Cumulative'],['rate','Daily rate']].forEach(function(pair){
+      var b = document.createElement('button');
+      b.textContent = pair[1];
+      if (pair[0]===rawChartMode) b.className = 'active';
+      b.addEventListener('click', function(){ rawChartMode = pair[0]; renderRawModeControl(); renderRawChart(); });
+      wrap.appendChild(b);
+    });
   }
   function syncRangeOptions(){
     var sel = document.getElementById('zt-range');
@@ -852,16 +867,46 @@ let unsubscribeSnapshot = null;
 
   function renderRawChart(){
     var ctx = document.getElementById('zt-chart-raw');
+    var mode = rawChartMode; // 'cumulative' or 'rate'
+    document.getElementById('zt-raw-sub').textContent = mode === 'rate'
+      ? 'Average consumption rate (kWh/day) between consecutive readings \u2014 flat segments make it easy to compare slopes across flats directly.'
+      : 'The actual numbers you logged, cumulative — useful for sanity-checking the chart above.';
+
     var datasets = METER_ORDER.map(function(m){
-      var pts = (DATA.readings[m]||[]).slice().sort(function(a,b){return readingTimestamp(a)-readingTimestamp(b);})
-        .map(function(r){ return { x: readingTimestamp(r).getTime(), y: r.value }; });
+      var sorted = (DATA.readings[m]||[]).slice().sort(function(a,b){return readingTimestamp(a)-readingTimestamp(b);});
+      var pts;
+      if (mode === 'rate'){
+        pts = [];
+        for (var i=0; i<sorted.length-1; i++){
+          var r1 = sorted[i], r2 = sorted[i+1];
+          var t1 = readingTimestamp(r1).getTime(), t2 = readingTimestamp(r2).getTime();
+          var days = (t2 - t1) / 86400000;
+          if (days <= 0) continue;
+          var rate = (r2.value - r1.value) / days;
+          if (rate < 0) continue; // meter reset/correction — same as prorate()
+          // One point at the START of each interval, holding flat (via
+          // stepped:'after') until the next reading — so each horizontal
+          // segment's height IS that interval's average daily rate,
+          // directly comparable across meters regardless of their very
+          // different cumulative totals.
+          pts.push({ x:t1, y: Math.round(rate*100)/100 });
+        }
+        // Extend the last known rate as a flat line up to the most recent
+        // reading, so the chart doesn't just stop short of "now".
+        if (sorted.length){
+          pts.push({ x: readingTimestamp(sorted[sorted.length-1]).getTime(), y: pts.length ? pts[pts.length-1].y : null });
+        }
+      } else {
+        pts = sorted.map(function(r){ return { x: readingTimestamp(r).getTime(), y: r.value }; });
+      }
       return {
         label: DATA.meters[m].name,
         data: pts,
         borderColor: METER_COLORS[m],
         backgroundColor: METER_COLORS[m],
         borderDash: DATA.meters[m].kind==='generation' ? [5,3] : [],
-        tension: 0, pointRadius: 3, pointHoverRadius: 5, spanGaps:false
+        stepped: mode === 'rate' ? 'after' : false,
+        tension: 0, pointRadius: mode === 'rate' ? 0 : 3, pointHoverRadius: 5, spanGaps:false
       };
     });
     if (chartRaw) chartRaw.destroy();
@@ -877,7 +922,12 @@ let unsubscribeSnapshot = null;
             backgroundColor:'#0F1417', borderColor:'#333B40', borderWidth:1, titleColor:'#ECEAE3', bodyColor:'#ECEAE3',
             callbacks:{
               title: function(items){ return new Date(items[0].parsed.x).toLocaleDateString('de-DE'); },
-              label: function(item){ return item.dataset.label + ': ' + item.parsed.y.toLocaleString('de-DE',{minimumFractionDigits:1}) + ' kWh'; }
+              label: function(item){
+                if (item.parsed.y === null || item.parsed.y === undefined) return item.dataset.label + ': no data';
+                return mode === 'rate'
+                  ? item.dataset.label + ': ' + item.parsed.y.toLocaleString('de-DE',{minimumFractionDigits:2}) + ' kWh/day'
+                  : item.dataset.label + ': ' + item.parsed.y.toLocaleString('de-DE',{minimumFractionDigits:1}) + ' kWh';
+              }
             }
           }
         },
@@ -1427,6 +1477,7 @@ let unsubscribeSnapshot = null;
   function renderAll(){
     renderMeterCards();
     renderControls();
+    renderRawModeControl();
     renderCharts();
     renderHistoryTabs();
     renderHistoryTable();
