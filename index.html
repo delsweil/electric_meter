@@ -67,6 +67,10 @@ body { margin:0; background:#14181B; }
 .zt-btn[disabled] { opacity:.4; cursor:not-allowed; }
 
 /* ---- Meter cards ---- */
+.zt-view-tabs { display:flex; gap:8px; margin-bottom:20px; }
+.zt-view-tabs button { font-family:var(--fb); font-size:13px; font-weight:600; padding:9px 16px; border-radius:12px; border:1px solid var(--border-soft); background:var(--panel); color:var(--text-dim); cursor:pointer; }
+.zt-view-tabs button.active { border-color:var(--mint); color:var(--mint); background:var(--mint-soft); }
+.zt-appliance-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:12px; margin-bottom:26px; }
 .zt-meter-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:12px; margin-bottom:26px; }
 .zt-card {
   background: var(--panel); border-radius: var(--radius-lg); box-shadow: 0 1px 3px rgba(0,0,0,.35);
@@ -215,6 +219,12 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
     </div>
     <input type="file" accept="image/*" multiple id="zt-batch-file-input" style="display:none;">
 
+    <div class="zt-view-tabs" id="zt-view-tabs">
+      <button class="active" data-view="meters">Meters</button>
+      <button data-view="appliances">Appliances</button>
+    </div>
+
+    <div id="zt-view-meters">
     <div class="zt-meter-grid" id="zt-meter-grid"></div>
 
     <div class="zt-section">
@@ -286,6 +296,41 @@ table.zt-table .row-actions { display:flex; gap:4px; justify-content:flex-end; }
         </table>
       </div>
     </div>
+    </div>
+
+    <div id="zt-view-appliances" style="display:none;">
+      <div class="zt-appliance-grid" id="zt-appliance-grid"></div>
+
+      <div class="zt-section">
+        <div class="zt-section-head">
+          <div>
+            <h2>Appliance usage by period</h2>
+            <div class="zt-section-sub">Daily kWh reported directly by each smart plug \u2014 no interpolation needed here, unlike the photographed meters.</div>
+          </div>
+          <div class="zt-controls">
+            <div class="zt-segmented" id="zt-appliance-granularity"></div>
+            <select class="zt-select" id="zt-appliance-range"></select>
+          </div>
+        </div>
+        <div class="zt-chart-card">
+          <div class="zt-chart-wrap"><canvas id="zt-chart-appliance-compare"></canvas></div>
+          <div class="zt-empty-note" id="zt-appliance-compare-empty" style="display:none;">Once the sync script has run at least once for an appliance, its usage will appear here.</div>
+        </div>
+      </div>
+
+      <div class="zt-section">
+        <div class="zt-section-head">
+          <div>
+            <h2>Daytime share</h2>
+            <div class="zt-section-sub">What fraction of each appliance's daily energy fell inside the sunny-hours window \u2014 the portion that's realistically shiftable to match solar generation.</div>
+          </div>
+        </div>
+        <div class="zt-chart-card">
+          <div class="zt-chart-wrap"><canvas id="zt-chart-appliance-daytime"></canvas></div>
+          <div class="zt-empty-note" id="zt-appliance-daytime-empty" style="display:none;">Needs the sync script's hourly breakdown to have run for at least a few days.</div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -337,6 +382,9 @@ let unsubscribeSnapshot = null;
   // points to. (Previously wrongly assumed to be flat3 — it's actually flat1.)
   var SOLAR_CONSUMPTION_METER = 'flat1';
 
+  var APPLIANCE_ORDER = ['scooter','washer','dishwasher'];
+  var APPLIANCE_COLORS = { scooter:'#8FCE9E', washer:'#7FC6D9', dishwasher:'#F0AD5E' };
+
   function defaultData(){
     return {
       meters: {
@@ -347,7 +395,12 @@ let unsubscribeSnapshot = null;
         flat3gen: { name:'Solar generated (total)', kind:'generation' }
       },
       readings: { flat1:[], flat2:[], flat3:[], flat3solar:[], flat3gen:[] },
-      settings: { pricePerKwh: null }
+      appliances: {
+        scooter: { name:'E-Scooter', readings:[] },
+        washer: { name:'Washing machine', readings:[] },
+        dishwasher: { name:'Dishwasher', readings:[] }
+      },
+      settings: { pricePerKwh: null, sunnyHourStart: 10, sunnyHourEnd: 16, knownBaselineKwhDay: null }
     };
   }
 
@@ -356,7 +409,9 @@ let unsubscribeSnapshot = null;
   var rangeCount = 10;
   var activeHistoryMeter = 'flat1';
   var rawChartMode = 'cumulative';
-  var chartCompare = null, chartSolar = null, chartRaw = null, chartEfficiency = null;
+  var chartCompare = null, chartSolar = null, chartRaw = null, chartEfficiency = null, chartApplianceCompare = null, chartApplianceDaytime = null;
+  var applianceGranularity = 'week';
+  var applianceRangeCount = 8;
   var pendingPhotoDataUrl = null;
   var editingId = null;
 
@@ -909,6 +964,21 @@ let unsubscribeSnapshot = null;
         tension: 0, pointRadius: mode === 'rate' ? 0 : 3, pointHoverRadius: 5, spanGaps:false
       };
     });
+
+    if (mode === 'rate' && DATA.settings.knownBaselineKwhDay != null){
+      var allX = [];
+      datasets.forEach(function(ds){ ds.data.forEach(function(p){ if (p && p.x!=null) allX.push(p.x); }); });
+      if (allX.length){
+        var minX = Math.min.apply(null, allX), maxX = Math.max.apply(null, allX);
+        var b = DATA.settings.knownBaselineKwhDay;
+        datasets.push({
+          label: 'Known baseline (always-on)',
+          data: [{x:minX, y:b}, {x:maxX, y:b}],
+          borderColor: '#676D72', backgroundColor: '#676D72',
+          borderDash: [2,3], borderWidth: 1.5, tension:0, pointRadius:0, stepped:false
+        });
+      }
+    }
     if (chartRaw) chartRaw.destroy();
     chartRaw = new Chart(ctx, {
       type:'line',
@@ -934,6 +1004,169 @@ let unsubscribeSnapshot = null;
         scales:{
           x:{ type:'linear', ticks:{ color:'#5C6670', font:{family:'DM Sans',size:10.5}, callback:function(v){ return fmtLong(new Date(v)); } }, grid:{ color:'#242A2E' } },
           y:{ ticks:{ color:'#5C6670', font:{family:'DM Sans',size:10.5} }, grid:{ color:'#242A2E' } }
+        }
+      }
+    });
+  }
+
+  // ---------- appliances (Tuya smart-plug data) ----------
+  // Unlike meter readings (sparse cumulative photos needing interpolation),
+  // appliance readings are direct daily kWh totals reported by the sync
+  // script — so bucketing is a straight sum, no prorate() needed.
+  function bucketSum(readings, buckets){
+    return buckets.map(function(b){
+      var total = 0, count = 0;
+      readings.forEach(function(r){
+        var t = parseDate(r.date).getTime();
+        if (t >= b.start.getTime() && t < b.end.getTime()){ total += (r.kwh||0); count++; }
+      });
+      return { start:b.start, end:b.end, label:b.label, rangeLabel:b.rangeLabel, value: count ? Math.round(total*10)/10 : null, count: count };
+    });
+  }
+
+  function applianceDateRange(){
+    var minT=null, maxT=null;
+    APPLIANCE_ORDER.forEach(function(id){
+      (DATA.appliances[id].readings||[]).forEach(function(r){
+        var t = parseDate(r.date).getTime();
+        if (minT===null || t<minT) minT = t;
+        if (maxT===null || t>maxT) maxT = t;
+      });
+    });
+    var today = parseDate(todayStr()).getTime();
+    if (maxT===null || today>maxT) maxT = today;
+    if (minT===null) minT = today;
+    return { min:new Date(minT), max:new Date(maxT) };
+  }
+
+  function renderApplianceGranularityControl(){
+    var gWrap = document.getElementById('zt-appliance-granularity');
+    gWrap.innerHTML = '';
+    [['day','Day'],['week','Week'],['month','Month']].forEach(function(pair){
+      var b = document.createElement('button');
+      b.textContent = pair[1];
+      if (pair[0]===applianceGranularity) b.className = 'active';
+      b.addEventListener('click', function(){ applianceGranularity = pair[0]; syncApplianceRangeOptions(); renderApplianceCharts(); });
+      gWrap.appendChild(b);
+    });
+    syncApplianceRangeOptions();
+  }
+  function syncApplianceRangeOptions(){
+    var sel = document.getElementById('zt-appliance-range');
+    var opts;
+    if (applianceGranularity==='day') opts = [[14,'Last 14'],[30,'Last 30'],[90,'Last 90'],[0,'All']];
+    else if (applianceGranularity==='week') opts = [[8,'Last 8'],[13,'Last 13'],[26,'Last 26'],[0,'All']];
+    else opts = [[6,'Last 6'],[12,'Last 12'],[24,'Last 24'],[0,'All']];
+    var prevVal = applianceRangeCount;
+    sel.innerHTML = opts.map(function(o){ return '<option value="'+o[0]+'">'+o[1]+'</option>'; }).join('');
+    var match = opts.find(function(o){ return o[0]===prevVal; });
+    sel.value = match ? String(prevVal) : String(opts[0][0]);
+    applianceRangeCount = parseInt(sel.value,10);
+    sel.onchange = function(){ applianceRangeCount = parseInt(sel.value,10); renderApplianceCharts(); };
+  }
+
+  function renderApplianceView(){
+    renderApplianceCards();
+    renderApplianceGranularityControl();
+    renderApplianceCharts();
+  }
+
+  function renderApplianceCards(){
+    var grid = document.getElementById('zt-appliance-grid');
+    grid.innerHTML = '';
+    APPLIANCE_ORDER.forEach(function(id){
+      var appliance = DATA.appliances[id];
+      var arr = (appliance.readings||[]).slice().sort(function(a,b){ return parseDate(b.date)-parseDate(a.date); });
+      var last = arr[0];
+      var card = document.createElement('div');
+      card.className = 'zt-card';
+      var ledHtml = last
+        ? '<span class="val">' + last.kwh.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + '</span><span class="unit">kWh</span>'
+        : '<span class="val">no data yet</span>';
+      var metaHtml = last
+        ? 'Last: ' + fmtLong(parseDate(last.date)) + (last.daytimeShare!=null ? ' \u00b7 ' + Math.round(last.daytimeShare*100) + '% daytime' : '')
+        : 'Set up the sync script to see data here';
+      card.innerHTML =
+        '<div class="zt-card-kind"><span class="zt-dot" style="background:' + APPLIANCE_COLORS[id] + '"></span>Appliance</div>' +
+        '<div class="zt-card-name">' + escapeHtml(appliance.name) + '</div>' +
+        '<div class="zt-led ' + (last?'amber':'empty') + '">' + ledHtml + '</div>' +
+        '<div class="zt-card-meta">' + metaHtml + '</div>';
+      grid.appendChild(card);
+    });
+  }
+
+  function renderApplianceCharts(){
+    var range = applianceDateRange();
+    var buckets = getBuckets(applianceGranularity, range.min, range.max, applianceRangeCount || null);
+    renderApplianceCompareChart(buckets);
+    renderApplianceDaytimeChart(buckets);
+  }
+
+  function renderApplianceCompareChart(buckets){
+    var ctx = document.getElementById('zt-chart-appliance-compare');
+    var hasAny = APPLIANCE_ORDER.some(function(id){ return (DATA.appliances[id].readings||[]).length>0; });
+    document.getElementById('zt-appliance-compare-empty').style.display = hasAny ? 'none' : 'block';
+    var datasets = APPLIANCE_ORDER.map(function(id){
+      var series = bucketSum(DATA.appliances[id].readings||[], buckets);
+      return {
+        label: DATA.appliances[id].name,
+        data: series.map(function(s){ return s.value; }),
+        backgroundColor: APPLIANCE_COLORS[id],
+        borderRadius:4, maxBarThickness:26
+      };
+    });
+    if (chartApplianceCompare) chartApplianceCompare.destroy();
+    chartApplianceCompare = new Chart(ctx, {
+      type:'bar',
+      data:{ labels: buckets.map(function(b){return b.label;}), datasets: datasets },
+      options: chartOptions(buckets, ' kWh')
+    });
+  }
+
+  function renderApplianceDaytimeChart(buckets){
+    var ctx = document.getElementById('zt-chart-appliance-daytime');
+    var hasAny = APPLIANCE_ORDER.some(function(id){ return (DATA.appliances[id].readings||[]).some(function(r){ return r.daytimeShare!=null; }); });
+    document.getElementById('zt-appliance-daytime-empty').style.display = hasAny ? 'none' : 'block';
+    var datasets = APPLIANCE_ORDER.map(function(id){
+      var readings = DATA.appliances[id].readings||[];
+      var series = buckets.map(function(b){
+        var matching = readings.filter(function(r){
+          var t = parseDate(r.date).getTime();
+          return t>=b.start.getTime() && t<b.end.getTime() && r.daytimeShare!=null;
+        });
+        if (!matching.length) return null;
+        var avg = matching.reduce(function(sum,r){ return sum+r.daytimeShare; },0) / matching.length;
+        return Math.round(avg*1000)/10;
+      });
+      return {
+        type:'line', label: DATA.appliances[id].name, data: series,
+        borderColor: APPLIANCE_COLORS[id], backgroundColor: APPLIANCE_COLORS[id],
+        tension:0.2, pointRadius:3, fill:false, spanGaps:true
+      };
+    });
+    if (chartApplianceDaytime) chartApplianceDaytime.destroy();
+    chartApplianceDaytime = new Chart(ctx, {
+      data:{ labels: buckets.map(function(b){return b.label;}), datasets: datasets },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        interaction:{ mode:'index', intersect:false },
+        plugins:{
+          legend:{ labels:{ color:'#8B95A0', font:{family:'DM Sans',size:11}, boxWidth:10, boxHeight:10 } },
+          tooltip:{
+            backgroundColor:'#0F1417', borderColor:'#333B40', borderWidth:1, titleColor:'#ECEAE3', bodyColor:'#ECEAE3',
+            callbacks:{
+              title: function(items){ var idx=items[0].dataIndex; return buckets[idx] ? buckets[idx].rangeLabel : ''; },
+              label: function(item){
+                var v = item.raw;
+                if (v===null || v===undefined) return item.dataset.label + ': no data';
+                return item.dataset.label + ': ' + v.toFixed(0) + '% during sunny hours';
+              }
+            }
+          }
+        },
+        scales:{
+          x:{ ticks:{ color:'#5C6670', font:{family:'DM Sans',size:10.5} }, grid:{ color:'#242A2E' } },
+          y:{ min:0, max:100, ticks:{ color:'#5C6670', font:{family:'DM Sans',size:10.5}, callback:function(v){ return v+'%'; } }, grid:{ color:'#242A2E' } }
         }
       }
     });
@@ -1422,6 +1655,10 @@ let unsubscribeSnapshot = null;
       return '<div class="zt-field"><label>' + (DATA.meters[id].kind==='generation' ? 'Solar meter name' : id.toUpperCase() + ' name') + '</label>' +
         '<input type="text" data-meter-name="' + id + '" value="' + escapeHtml(DATA.meters[id].name) + '"></div>';
     }).join('');
+    var applianceFields = APPLIANCE_ORDER.map(function(id){
+      return '<div class="zt-field"><label>Appliance name (' + id + ')</label>' +
+        '<input type="text" data-appliance-name="' + id + '" value="' + escapeHtml(DATA.appliances[id].name) + '"></div>';
+    }).join('');
     overlay.innerHTML =
       '<div class="zt-modal">' +
         '<h3>Settings</h3>' +
@@ -1430,6 +1667,16 @@ let unsubscribeSnapshot = null;
         '<div class="zt-field"><label>Electricity price (€ / kWh, optional)</label>' +
           '<input type="number" step="0.01" min="0" id="zt-price-input" placeholder="e.g. 0.32" value="' + (DATA.settings.pricePerKwh != null ? DATA.settings.pricePerKwh : '') + '"></div>' +
         '<div class="zt-hint">Used only to estimate money saved by self-consumed solar generation. Leave blank to hide that figure.</div>' +
+        '<p class="zt-modal-sub" style="margin-top:18px;">Appliances (Tuya smart plugs)</p>' +
+        applianceFields +
+        '<div class="zt-field-row">' +
+          '<div class="zt-field" style="flex:1;"><label>Sunny hours start</label><input type="number" min="0" max="23" id="zt-sunny-start-input" value="' + DATA.settings.sunnyHourStart + '"></div>' +
+          '<div class="zt-field" style="flex:1;"><label>Sunny hours end</label><input type="number" min="0" max="23" id="zt-sunny-end-input" value="' + DATA.settings.sunnyHourEnd + '"></div>' +
+        '</div>' +
+        '<div class="zt-hint">The window used to compute each appliance\u2019s "daytime share" \u2014 the Tuya sync script reads this before splitting a day\u2019s energy into sunny vs. off-sun hours.</div>' +
+        '<div class="zt-field" style="margin-top:14px;"><label>Known always-on baseline (kWh/day, optional)</label>' +
+          '<input type="number" step="0.01" min="0" id="zt-baseline-input" placeholder="e.g. 0.56" value="' + (DATA.settings.knownBaselineKwhDay != null ? DATA.settings.knownBaselineKwhDay : '') + '"></div>' +
+        '<div class="zt-hint">From published specs for always-on devices (fridge, router, etc.) rather than measured \u2014 shown as a reference line on the Raw meter readings chart in "Daily rate" mode. Leave blank to hide it.</div>' +
         '<div class="zt-modal-actions">' +
           '<button class="zt-btn zt-btn-ghost" id="zt-settings-cancel">Cancel</button>' +
           '<button class="zt-btn zt-btn-primary" id="zt-settings-save">Save</button>' +
@@ -1445,8 +1692,19 @@ let unsubscribeSnapshot = null;
         var v = inp.value.trim();
         if (v) DATA.meters[id].name = v;
       });
+      overlay.querySelectorAll('[data-appliance-name]').forEach(function(inp){
+        var id = inp.getAttribute('data-appliance-name');
+        var v = inp.value.trim();
+        if (v) DATA.appliances[id].name = v;
+      });
       var priceVal = parseFloat(overlay.querySelector('#zt-price-input').value);
       DATA.settings.pricePerKwh = isNaN(priceVal) ? null : priceVal;
+      var sunnyStart = parseInt(overlay.querySelector('#zt-sunny-start-input').value, 10);
+      var sunnyEnd = parseInt(overlay.querySelector('#zt-sunny-end-input').value, 10);
+      DATA.settings.sunnyHourStart = isNaN(sunnyStart) ? 10 : Math.max(0, Math.min(23, sunnyStart));
+      DATA.settings.sunnyHourEnd = isNaN(sunnyEnd) ? 16 : Math.max(0, Math.min(23, sunnyEnd));
+      var baselineVal = parseFloat(overlay.querySelector('#zt-baseline-input').value);
+      DATA.settings.knownBaselineKwhDay = isNaN(baselineVal) ? null : baselineVal;
       saveData().then(function(){ overlay.remove(); unlockScroll(); renderAll(); toast('Settings updated.'); });
     });
   }
@@ -1483,6 +1741,17 @@ let unsubscribeSnapshot = null;
     renderHistoryTable();
   }
 
+  document.getElementById('zt-view-tabs').querySelectorAll('button').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.getElementById('zt-view-tabs').querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+      var view = btn.getAttribute('data-view');
+      document.getElementById('zt-view-meters').style.display = view === 'meters' ? '' : 'none';
+      document.getElementById('zt-view-appliances').style.display = view === 'appliances' ? '' : 'none';
+      if (view === 'appliances') renderApplianceView();
+    });
+  });
+
   document.getElementById('zt-btn-add-global').addEventListener('click', function(){ openReadingModal('flat1'); });
   document.getElementById('zt-btn-settings').addEventListener('click', openSettingsModal);
   document.getElementById('zt-btn-export').addEventListener('click', exportCSV);
@@ -1500,6 +1769,14 @@ let unsubscribeSnapshot = null;
     });
     if (!d.settings) d.settings = def.settings;
     if (d.settings.pricePerKwh === undefined) d.settings.pricePerKwh = null;
+    if (d.settings.sunnyHourStart === undefined) d.settings.sunnyHourStart = 10;
+    if (d.settings.sunnyHourEnd === undefined) d.settings.sunnyHourEnd = 16;
+    if (d.settings.knownBaselineKwhDay === undefined) d.settings.knownBaselineKwhDay = null;
+    if (!d.appliances) d.appliances = {};
+    APPLIANCE_ORDER.forEach(function(id){
+      if (!d.appliances[id]) d.appliances[id] = def.appliances[id];
+      if (!d.appliances[id].readings) d.appliances[id].readings = [];
+    });
 
     // One-time cleanup: earlier versions of the Solarman sync script wrote
     // total-generation figures into the flat3solar (grid feed-in) meter by
