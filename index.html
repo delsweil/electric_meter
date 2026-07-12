@@ -924,8 +924,8 @@ let unsubscribeSnapshot = null;
     var ctx = document.getElementById('zt-chart-raw');
     var mode = rawChartMode; // 'cumulative' or 'rate'
     document.getElementById('zt-raw-sub').textContent = mode === 'rate'
-      ? 'Average consumption rate (kWh/day) between consecutive readings \u2014 flat segments make it easy to compare slopes across flats directly.'
-      : 'The actual numbers you logged, cumulative — useful for sanity-checking the chart above.';
+      ? 'Average consumption rate (kWh/day) between consecutive readings \u2014 flat segments make it easy to compare slopes across flats directly. Faded segments span a longer gap between real readings, so treat them as a smoothed guess rather than observed detail.'
+      : 'The actual numbers you logged, cumulative — useful for sanity-checking the chart above. Faded segments connect readings taken far apart in time.';
 
     var datasets = METER_ORDER.map(function(m){
       var sorted = (DATA.readings[m]||[]).slice().sort(function(a,b){return readingTimestamp(a)-readingTimestamp(b);});
@@ -961,7 +961,19 @@ let unsubscribeSnapshot = null;
         backgroundColor: METER_COLORS[m],
         borderDash: DATA.meters[m].kind==='generation' ? [5,3] : [],
         stepped: mode === 'rate' ? 'after' : false,
-        tension: 0, pointRadius: mode === 'rate' ? 0 : 3, pointHoverRadius: 5, spanGaps:false
+        tension: 0, pointRadius: mode === 'rate' ? 0 : 3, pointHoverRadius: 5, spanGaps:false,
+        // Fade the CONNECTING LINE (not the real data points themselves)
+        // based on how many days separate the two actual readings either
+        // side of it — a long gap means everything between is one
+        // straight-line guess, not observed variation, and should look
+        // like one rather than reading as smooth real change.
+        segment: {
+          borderColor: function(segCtx){
+            var days = (segCtx.p1.parsed.x - segCtx.p0.parsed.x) / 86400000;
+            var alpha = days <= 3 ? 1 : (days <= 14 ? 0.55 : 0.25);
+            return hexToRgba(METER_COLORS[m], alpha);
+          }
+        }
       };
     });
 
